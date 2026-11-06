@@ -1,11 +1,11 @@
-from pathlib import Path
 import subprocess
 import unittest
+from pathlib import Path
 
 
 class ScoreEngineTests(unittest.TestCase):
     def test_audio_timeline_and_cursor(self):
-        result=subprocess.run(['node',str(Path(__file__).with_suffix('.js'))],capture_output=True,text=True,timeout=15)
+        result=subprocess.run(['node',str(Path(__file__).with_suffix('.js'))],check=False,capture_output=True,text=True,timeout=15)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 
     def test_paheko_and_converter_share_exact_parser(self):

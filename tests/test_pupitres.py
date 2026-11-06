@@ -1,14 +1,18 @@
-import io
-import json
-from pathlib import Path
 import tempfile
 import unittest
-import zipfile
 import xml.etree.ElementTree as ET
+import zipfile
+from pathlib import Path
+
 import pupitres
 
-
 SCORE=b'''<score-partwise version="4.0"><part-list><score-part id="P1"><part-name>Voice</part-name><score-instrument id="I1"><instrument-name>Voice</instrument-name></score-instrument><midi-instrument id="I1"><midi-channel>1</midi-channel></midi-instrument></score-part></part-list><part id="P1"><measure number="1"><attributes><divisions>2</divisions><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes><direction><sound tempo="120"/></direction><note><pitch><step>C</step><octave>4</octave></pitch><duration>4</duration><voice>1</voice><type>half</type></note><note><pitch><step>D</step><octave>4</octave></pitch><duration>4</duration><voice>1</voice><type>half</type></note><backup><duration>8</duration></backup><note><pitch><step>G</step><octave>3</octave></pitch><duration>8</duration><voice>2</voice><type>whole</type></note></measure><measure number="2"><note><pitch><step>E</step><octave>4</octave></pitch><duration>8</duration><voice>1</voice><type>whole</type></note><backup><duration>8</duration></backup><note><rest/><duration>4</duration><voice>2</voice><type>half</type></note><note><pitch><step>A</step><octave>3</octave></pitch><duration>4</duration><voice>2</voice><type>half</type></note></measure></part></score-partwise>'''
+
+def required_element(root: ET.Element, path: str) -> ET.Element:
+    element = root.find(path)
+    if element is None:
+        raise AssertionError(f'Missing test fixture element: {path}')
+    return element
 
 
 def timeline(part):
@@ -32,13 +36,13 @@ def timeline(part):
 class PupitreTests(unittest.TestCase):
     def test_same_name_groups_voices_without_changing_notes_or_lyrics(self):
         root=ET.fromstring(SCORE)
-        lyric=ET.SubElement(root.find('part/measure/note'),'lyric')
+        lyric=ET.SubElement(required_element(root,'part/measure/note'),'lyric')
         ET.SubElement(lyric,'text').text='la'
-        original=root.find('part')
+        original=required_element(root,'part')
         result=ET.fromstring(pupitres.separate(ET.tostring(root),{'P1/1/1':'Ténor','P1/1/2':' ténor '}))
         self.assertEqual(len(result.findall('part')),1)
         self.assertEqual(result.findtext('part-list/score-part/part-name'),'Ténor')
-        merged=result.find('part')
+        merged=required_element(result,'part')
         self.assertEqual(timeline(merged),timeline(original))
         self.assertEqual({n.findtext('voice') for n in merged.findall('measure/note')},{'1','2'})
         self.assertEqual(merged.findtext('measure/note/lyric/text'),'la')
@@ -116,13 +120,13 @@ class PupitreTests(unittest.TestCase):
         self.assertEqual(len(second.findall('measure/attributes/clef')),1)
 
     def test_paths_and_entities_are_rejected(self):
-        with tempfile.TemporaryDirectory() as temp:
-            with self.assertRaises(ValueError):pupitres.source(Path(temp),'../score.xml')
+        with tempfile.TemporaryDirectory() as temp, self.assertRaises(ValueError):
+            pupitres.source(Path(temp),'../score.xml')
         with self.assertRaises(ValueError):pupitres.discover(b'<!DOCTYPE x [<!ENTITY x "x">]><score-partwise/>')
 
     def test_sparse_voice_has_real_silences_between_lyrics(self):
         root=ET.fromstring(SCORE)
-        part=root.find('part')
+        part=required_element(root,'part')
         middle=ET.fromstring('<measure number="2"><note><pitch><step>C</step><octave>4</octave></pitch><duration>8</duration><voice>1</voice></note></measure>')
         part.insert(1,middle)
         for measure in (part[0],part[2]):
@@ -132,8 +136,8 @@ class PupitreTests(unittest.TestCase):
             ET.SubElement(lyric,'text').text='la'
         result=ET.fromstring(pupitres.separate(ET.tostring(root),{'P1/1/1':'Alto','P1/1/2':'Ténor'}))
         sparse=result.findall('part')[1]
-        silence=sparse.findall('measure')[1].find('note')
-        self.assertEqual(silence.find('rest').get('measure'),'yes')
+        silence=required_element(sparse.findall('measure')[1],'note')
+        self.assertEqual(required_element(silence,'rest').get('measure'),'yes')
         self.assertEqual(silence.findtext('duration'),'8')
         self.assertEqual(timeline(sparse),[(0,4,'G','3'),(10,2,'A','3')])
         self.assertEqual([l.findtext('text') for l in sparse.findall('measure/note/lyric')],['la','la'])

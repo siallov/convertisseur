@@ -60,7 +60,7 @@ class SyncTests(unittest.TestCase):
         seen = {}
 
         class Api(BaseHTTPRequestHandler):
-            def log_message(self, *a):
+            def log_message(self, format: str, *args: object) -> None:
                 pass
 
             def do_POST(self):
@@ -74,6 +74,7 @@ class SyncTests(unittest.TestCase):
 
         server = HTTPServer(('127.0.0.1', 0), Api)
         threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         config = {'url': f'http://127.0.0.1:{server.server_port}', 'api_id': 'sync', 'api_secret': 's', 'categories': [1]}
         self.assertEqual(sm.fetch_members(config), [(7, 'Zoé Z', 'z@x.fr')])

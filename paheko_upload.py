@@ -6,11 +6,18 @@ Configuration lives in private/paheko.json (mode 600), created with
 import base64
 import json
 from pathlib import Path
+from typing import Literal, TypedDict, overload
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
 CONFIG = Path(__file__).resolve().parent / 'private' / 'paheko.json'
+
+class PublishResult(TypedDict):
+    state: str
+    message: str
+    sent: list[str]
+    existing: list[str]
 
 
 def load_config():
@@ -31,16 +38,28 @@ def _request(config, method, path, data=None, headers=None):
     return urlopen(request, timeout=60)
 
 
-def publish(files, detailed=False):
+@overload
+def publish(files: list[tuple[str, Path]], detailed: Literal[True]) -> PublishResult | None: ...
+
+
+@overload
+def publish(files: list[tuple[str, Path]], detailed: Literal[False] = False) -> str | None: ...
+
+
+def publish(files: list[tuple[str, Path]], detailed: bool = False) -> PublishResult | str | None:
     """files: list of (display_name, Path). Returns a short French status message, or None if disabled."""
     config = load_config()
     if not config:
         return None
     folder = quote(config.get('folder', '').strip('/'), safe='/')
     prefix = folder + '/' if folder else ''
-    sent, existing = [], []
-    def answer(state, message):
-        return {'state': state, 'message': message, 'sent': sent, 'existing': existing} if detailed else message
+    sent: list[str] = []
+    existing: list[str] = []
+
+    def answer(state: str, message: str) -> PublishResult | str:
+        if detailed:
+            return {'state': state, 'message': message, 'sent': sent, 'existing': existing}
+        return message
     try:
         if folder:
             try:

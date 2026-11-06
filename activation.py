@@ -1,11 +1,10 @@
 """One-time activation links: a new choir member chooses their own password."""
 import hashlib
 import json
-import os
-from pathlib import Path
 import re
 import secrets
 import time
+from pathlib import Path
 
 FILE = Path(__file__).resolve().parent / 'private' / 'activations.json'
 VALIDITY = 48 * 3600

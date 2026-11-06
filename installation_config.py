@@ -4,6 +4,7 @@ import os
 import re
 import tempfile
 from urllib.parse import urlparse
+
 import paheko_upload
 
 
@@ -17,14 +18,15 @@ def raw():
 
 def https_url(value, origin=False):
     if not isinstance(value, str):
-        raise ValueError('Adresse HTTPS invalide.')
+        raise TypeError('Adresse HTTPS invalide.')
     u = urlparse(value.strip())
     if u.scheme != 'https' or not u.hostname or u.username or u.password or u.query or u.fragment or any(c.isspace() for c in value):
         raise ValueError('Utilisez une adresse HTTPS sans identifiants, paramètres ni fragment.')
     if origin and u.path.strip('/'):
         raise ValueError('Indiquez seulement le domaine HTTPS, sans chemin.')
     try:
-        u.port
+        if u.port is not None and not 0 <= u.port <= 65535:
+            raise ValueError('Port invalide.')
     except ValueError:
         raise ValueError('Port invalide.')
     return value.strip().rstrip('/')
@@ -46,7 +48,7 @@ def administrative():
 
 def save(values):
     if not isinstance(values, dict):
-        raise ValueError('Configuration invalide.')
+        raise TypeError('Configuration invalide.')
     old = raw()
     url = https_url(values.get('webdav_url', '')) + '/'
     converter = https_url(values.get('converter_url', ''), origin=True)

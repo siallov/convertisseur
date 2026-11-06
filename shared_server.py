@@ -5,20 +5,22 @@ import base64
 import getpass
 import hashlib
 import hmac
-from http.cookies import SimpleCookie
 import json
+import logging
 import os
-from pathlib import Path
 import secrets
 import shutil
 import threading
 import time
-from urllib.parse import parse_qs, urlparse
-import activation
-import installation_config
-import app
-import pupitres
 import zipfile
+from http.cookies import CookieError, SimpleCookie
+from typing import ClassVar
+from urllib.parse import parse_qs, urlparse
+
+import activation
+import app
+import installation_config
+import pupitres
 
 STATE = app.ROOT / 'private'
 ACCOUNTS = STATE / 'accounts.json'
@@ -30,6 +32,7 @@ try:
 except (OSError, ValueError):
     PUBLIC_URL = ''
 PUBLIC_URL = PUBLIC_URL or ''
+LOGGER = logging.getLogger(__name__)
 
 
 def accounts():
@@ -76,9 +79,9 @@ def cleanup():
 
 
 class SharedHandler(app.Handler):
-    sessions = {}
+    sessions: ClassVar[dict[str, tuple[str, float]]] = {}
     sessions_lock = threading.Lock()
-    attempts = {}
+    attempts: ClassVar[dict[str, tuple[float, int]]] = {}
     attempts_lock = threading.Lock()
 
     def setup(self):
@@ -148,8 +151,8 @@ class SharedHandler(app.Handler):
                 if session and session[1] > time.time() and session[0] in accounts():
                     self.user = session[0]
                     return True
-            except Exception:
-                pass
+            except CookieError:
+                LOGGER.debug('Ignoring malformed session cookie')
         # Loopback is not trusted: local requests require authentication too.
         identity = self.headers.get('CF-Connecting-IP', self.client_address[0])
         now = time.monotonic()
@@ -351,7 +354,7 @@ class SharedHandler(app.Handler):
                 length=int(self.headers.get('Content-Length','0'))
                 if not 0<length<=524288:raise ValueError('Paramètres trop grands ou vides.')
                 values=json.loads(self.rfile.read(length))
-                if not isinstance(values,dict):raise ValueError('Paramètres invalides.')
+                if not isinstance(values,dict):raise TypeError('Paramètres invalides.')
                 with app.LOCK:
                     job=app.JOBS.get(match[1])
                     if not job or job.get('owner')!=self.user:

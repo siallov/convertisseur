@@ -4,16 +4,17 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import patch
 
 import paheko_upload
 
 
 class FakeDav(BaseHTTPRequestHandler):
-    store = {}
-    log = []
+    store: ClassVar[dict[str, bytes]] = {}
+    log: ClassVar[list[tuple[str, str, str | None]]] = []
 
-    def log_message(self, *args):
+    def log_message(self, format: str, *args: object) -> None:
         pass
 
     def reply(self, code):
@@ -69,7 +70,9 @@ class PahekoUploadTest(unittest.TestCase):
         with self.config(), patch.object(paheko_upload, '_request', fake_request):
             self.assertEqual(paheko_upload.publish([("J'aime le vin.musicxml", self.file)]), 'Envoyé dans Paheko Documents.')
             self.assertIn("/dav/documents/Partitions/J%27aime%20le%20vin.musicxml", FakeDav.store)
-            self.assertIn('Déjà présent', paheko_upload.publish([("J'aime le vin.musicxml", self.file)]))
+            result = paheko_upload.publish([("J'aime le vin.musicxml", self.file)])
+            if not isinstance(result, str):self.fail('Expected a publication status message.')
+            self.assertIn('Déjà présent', result)
 
 
 if __name__ == '__main__':

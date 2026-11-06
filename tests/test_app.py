@@ -1,12 +1,12 @@
-import json
-from pathlib import Path
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
-from urllib.request import urlopen, Request
-from urllib.error import HTTPError
 import zipfile
+from pathlib import Path
+from unittest.mock import patch
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
+
 import app
 
 
@@ -74,7 +74,7 @@ class ApplicationTests(unittest.TestCase):
         base = f'http://127.0.0.1:{server.server_port}'
         try:
             with urlopen(base) as response:
-                self.assertIn('Vos partitions'.encode(), response.read())
+                self.assertIn(b'Vos partitions', response.read())
             with patch.object(app, 'engine_command', return_value=None):
                 with self.assertRaises(HTTPError) as error:
                     urlopen(Request(base + '/api/jobs', data=b'%PDF-1.4'))

@@ -1,18 +1,20 @@
 import base64
 import hashlib
 import json
-from pathlib import Path
 import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import patch
-from urllib.request import Request, urlopen
 from urllib.error import HTTPError
-import app
-import shared_server as shared
-import paheko_upload
+from urllib.request import Request, urlopen
+
 from test_pupitres import SCORE
+
+import app
+import paheko_upload
+import shared_server as shared
 
 
 class SharedTests(unittest.TestCase):
@@ -63,7 +65,7 @@ class SharedTests(unittest.TestCase):
         folder = app.DATA / self.job
         folder.mkdir()
         (folder/'partition-1.musicxml').write_text('<score-partwise/>')
-        app.JOBS[self.job] = dict(owner='alice', created=time.time(), name='Partition privée', status='done', files=['partition-1.musicxml'])
+        app.JOBS[self.job] = {'owner':'alice','created':time.time(),'name':'Partition privée','status':'done','files':['partition-1.musicxml']}
         self.server = app.ThreadingHTTPServer(('127.0.0.1',0),shared.SharedHandler)
         self.thread = threading.Thread(target=self.server.serve_forever,daemon=True)
         self.thread.start()
@@ -160,10 +162,9 @@ class SharedTests(unittest.TestCase):
                 self.assertIsNone(r.headers.get('Access-Control-Allow-Origin'))
 
     def test_public_status_contains_no_user_data(self):
-        with patch.object(app, 'engine_command', return_value=['audiveris']):
-            with self.request('/api/status',headers={'Origin':'https://chorale-bem.paheko.cloud'}) as r:
-                self.assertEqual(json.load(r),{'available':True})
-                self.assertEqual(r.headers['Access-Control-Allow-Origin'],'https://chorale-bem.paheko.cloud')
+        with patch.object(app, 'engine_command', return_value=['audiveris']), self.request('/api/status',headers={'Origin':'https://chorale-bem.paheko.cloud'}) as r:
+            self.assertEqual(json.load(r),{'available':True})
+            self.assertEqual(r.headers['Access-Control-Allow-Origin'],'https://chorale-bem.paheko.cloud')
         with self.request('/api/status',headers={'Origin':'https://attacker.example'}) as r:
             self.assertIsNone(r.headers.get('Access-Control-Allow-Origin'))
 
@@ -194,7 +195,7 @@ class SharedTests(unittest.TestCase):
     def test_expiration_preserves_active_jobs(self):
         app.JOBS[self.job]['created']=time.time()-shared.RETENTION-1
         active='b'*32
-        app.JOBS[active]=dict(status='running',created=0)
+        app.JOBS[active]={'status':'running','created':0}
         shared.cleanup()
         self.assertNotIn(self.job,app.JOBS)
         self.assertFalse((app.DATA/self.job).exists())

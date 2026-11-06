@@ -3,9 +3,10 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
 import app
-import paheko_upload
 import installation_config as config
+import paheko_upload
 
 
 class InstallationTests(unittest.TestCase):
@@ -13,20 +14,26 @@ class InstallationTests(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.path=Path(self.tmp.name)/'private/paheko.json'
         self.patcher=patch.object(paheko_upload,'CONFIG',self.path);self.patcher.start();self.addCleanup(self.patcher.stop)
-        self.values=dict(association='Nouvelle chorale',converter_url='https://omr.example.net',webdav_url='https://chorale.example.net/dav/documents/',module_path='/m/chorale_test/',folder='Musique/Partitions',webdav_user='omr-bot',webdav_password='fake-password')
+        self.values={'association':'Nouvelle chorale','converter_url':'https://omr.example.net','webdav_url':'https://chorale.example.net/dav/documents/','module_path':'/m/chorale_test/','folder':'Musique/Partitions','webdav_user':'omr-bot','webdav_password':'fake-password'}
 
     def test_generic_default_and_explicit_legacy_compatibility(self):
         self.assertEqual(config.public()['module_path'],'/m/chorale/')
         config.save(dict(self.values,module_path='/m/chorale_bem/'))
-        self.assertIn('/m/chorale_bem/?',app.reader_url('Mon chant'))
+        reader_url=app.reader_url('Mon chant')
+        if reader_url is None:self.fail('Expected a Paheko reader URL.')
+        self.assertIn('/m/chorale_bem/?',reader_url)
 
     def test_new_installation_and_dynamic_links(self):
         result=config.save(self.values)
         self.assertEqual(self.path.stat().st_mode&0o777,0o600)
         self.assertNotIn('fake-password',json.dumps(result))
         self.assertNotIn('webdav_user',config.public())
-        self.assertTrue(app.reader_url('Mon chant').startswith('https://chorale.example.net/m/chorale_test/?'))
-        self.assertEqual(paheko_upload.load_config()['folder'],'Musique/Partitions')
+        reader_url=app.reader_url('Mon chant')
+        if reader_url is None:self.fail('Expected a Paheko reader URL.')
+        self.assertTrue(reader_url.startswith('https://chorale.example.net/m/chorale_test/?'))
+        saved_config=paheko_upload.load_config()
+        if saved_config is None:self.fail('Expected the saved Paheko configuration.')
+        self.assertEqual(saved_config['folder'],'Musique/Partitions')
 
     def test_keep_secret_and_require_it_for_new_destination(self):
         config.save(self.values)

@@ -1,12 +1,12 @@
-import json
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-from urllib.parse import quote, urlparse, parse_qs
-import xml.etree.ElementTree as ET
+from urllib.parse import parse_qs, quote, urlparse
+
 import app
 
 

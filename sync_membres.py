@@ -15,7 +15,6 @@ import base64
 import getpass
 import json
 import os
-from pathlib import Path
 import re
 import secrets
 import smtplib

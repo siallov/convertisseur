@@ -8,13 +8,17 @@ import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs
+
 import shared_server as shared
 
 PAGE = '''<!doctype html><html lang="fr"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Configurer le partage des partitions</title><style>body{font:16px system-ui;max-width:620px;margin:50px auto;padding:24px;color:#243e32;background:#f6f7f3}input,textarea,button{box-sizing:border-box;width:100%;padding:12px;margin:8px 0 22px;font:inherit}button{background:#3d5c3d;color:white;border:0;border-radius:6px}small{display:block;color:#66735e;line-height:1.5}</style><h1>Votre convertisseur privé</h1><p>Ces informations sont enregistrées uniquement sur cet ordinateur. Le mot de passe sera conservé sous forme d’empreinte.</p><form method="post" autocomplete="off"><label>Votre identifiant<input name="username" value="andre" required pattern="[A-Za-z0-9_.-]{3,40}" autocomplete="username"></label><label>Votre mot de passe<input name="password" type="password" minlength="12" required autocomplete="new-password"></label><label>Confirmer le mot de passe<input name="confirmation" type="password" minlength="12" required autocomplete="new-password"></label><label>Commande du tunnel Cloudflare<textarea name="tunnel" rows="4" required placeholder="Collez ici la commande cloudflared copiée depuis Cloudflare"></textarea></label><small>Dans l’onglet Cloudflare, utilisez le bouton de copie de la commande « Or, run tunnel (manual) », puis collez-la ici. La commande complète ou son jeton seul est accepté.</small><button>Enregistrer sur mon PC</button></form></html>'''
 
+class SetupHTTPServer(HTTPServer):
+    setup_path: str
+
 
 class SetupHandler(BaseHTTPRequestHandler):
-    def log_message(self,*args):
+    def log_message(self, format: str, *args: object) -> None:
         pass
 
     def response(self, code, text):
@@ -29,12 +33,12 @@ class SetupHandler(BaseHTTPRequestHandler):
         self.wfile.write(content)
 
     def do_GET(self):
-        if self.path != self.server.setup_path:
+        if not isinstance(self.server, SetupHTTPServer) or self.path != self.server.setup_path:
             return self.response(404,'Page introuvable.')
         self.response(200,PAGE)
 
     def do_POST(self):
-        if self.path != self.server.setup_path or shared.ACCOUNTS.exists():
+        if not isinstance(self.server, SetupHTTPServer) or self.path != self.server.setup_path or shared.ACCOUNTS.exists():
             return self.response(403,'Configuration initiale déjà effectuée ou lien invalide.')
         if self.headers.get('Origin') != 'http://127.0.0.1:8767':
             return self.response(403,'Origine refusée.')
@@ -67,7 +71,7 @@ class SetupHandler(BaseHTTPRequestHandler):
 if __name__=='__main__':
     if shared.ACCOUNTS.exists():
         raise SystemExit('Un compte existe déjà. Utilisez shared_server.py --add-user pour gérer les comptes.')
-    server=HTTPServer(('127.0.0.1',8767),SetupHandler)
+    server=SetupHTTPServer(('127.0.0.1',8767),SetupHandler)
     server.setup_path='/'+secrets.token_urlsafe(24)
     server.timeout=60
     print('http://127.0.0.1:8767'+server.setup_path,flush=True)

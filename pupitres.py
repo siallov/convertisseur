@@ -1,12 +1,11 @@
 """Name and separate explicitly encoded MusicXML voices; never infer by pitch."""
-from copy import deepcopy
 import io
 import json
 import os
-from pathlib import Path
 import re
-import zipfile
 import xml.etree.ElementTree as ET
+import zipfile
+from copy import deepcopy
 
 LABELS = ('Soprano', 'Alto', 'Ténor', 'Baryton', 'Basse', 'Accompagnement')
 
@@ -23,9 +22,10 @@ def parse(data):
 
 def discover(data):
     root = parse(data)
-    names = {p.get('id'): p.findtext('part-name', '') for p in root.findall('part-list/score-part')}
+    names = {p.get('id', ''): p.findtext('part-name', '') for p in root.findall('part-list/score-part')}
     result = []
     for part in root.findall('part'):
+        part_id = part.get('id', '')
         groups = {}
         for note in part.findall('measure/note'):
             if note.find('pitch') is None:continue
@@ -33,12 +33,12 @@ def discover(data):
             groups.setdefault((staff, voice), 0)
             groups[(staff, voice)] += 1
         for (staff, voice), count in groups.items():
-            name = names.get(part.get('id'), '').strip()
-            generic = not name or bool(re.fullmatch(r'(voice|voix|part(ie)?|piano|instrument)[ ._-]*\d*', name, re.I))
-            label = 'Pupitre %d' % (len(result)+1) if generic else name
-            if len(groups) > 1 and not generic:label += ' — ligne %s' % voice
-            result.append({'id': '%s/%s/%s' % (part.get('id'),staff,voice),
-                           'part':part.get('id'), 'staff':staff, 'voice':voice,
+            name = names.get(part_id, '').strip()
+            generic = not name or bool(re.fullmatch(r'(voice|voix|part(ie)?|piano|instrument)[ ._-]*\d*', name, re.IGNORECASE))
+            label = f'Pupitre {len(result)+1}' if generic else name
+            if len(groups) > 1 and not generic:label += f' — ligne {voice}'
+            result.append({'id': f'{part_id}/{staff}/{voice}',
+                           'part':part_id, 'staff':staff, 'voice':voice,
                            'source_name':name, 'label':label, 'notes':count})
     if len(result) > 64:raise ValueError('Cette partition comporte trop de lignes musicales.')
     return result
@@ -47,14 +47,15 @@ def discover(data):
 def note_catalog(data):
     result=[]
     for part in parse(data).findall('part'):
+        part_id = part.get('id', '')
         for mi,measure in enumerate(part.findall('measure')):
             for ni,note in enumerate(measure.findall('note')):
                 staff=note.findtext('staff','1')
                 pitch=note.find('pitch')
-                result.append({'id':'%s/%d/%d'%(part.get('id'),mi,ni),'part':part.get('id'),'staff':staff,
+                result.append({'id':f'{part_id}/{mi}/{ni}','part':part_id,'staff':staff,
                     'measure':measure.get('number',str(mi+1)),'index':ni+1,
-                    'track':'%s/%s/%s'%(part.get('id'),staff,note.findtext('voice','1')),
-                    'note':'Silence' if pitch is None else {'C':'Do','D':'Ré','E':'Mi','F':'Fa','G':'Sol','A':'La','B':'Si'}.get(pitch.findtext('step'),'')+{'-2':'♭♭','-1':'♭','0':'','1':'♯','2':'♯♯'}.get(pitch.findtext('alter',''),'')+pitch.findtext('octave',''),
+                    'track':f'{part_id}/{staff}/{note.findtext("voice","1")}',
+                    'note':'Silence' if pitch is None else {'C':'Do','D':'Ré','E':'Mi','F':'Fa','G':'Sol','A':'La','B':'Si'}.get(pitch.findtext('step',''),'')+{'-2':'♭♭','-1':'♭','0':'','1':'♯','2':'♯♯'}.get(pitch.findtext('alter',''),'')+pitch.findtext('octave',''),
                     'type':note.findtext('type','mesure')})
     return result
 
@@ -92,7 +93,10 @@ def separate(data, labels, corrections=None):
             raise ValueError('Le regroupement exige des lignes de la même portée d’origine. Utilisez des noms distincts pour les autres portées.')
         group.append(track)
     root = parse(data); output = deepcopy(root)
-    part_list = output.find('part-list');part_list.clear()
+    part_list = output.find('part-list')
+    if part_list is None:
+        raise ValueError('Liste des parties MusicXML manquante.')
+    part_list.clear()
     for part in list(output.findall('part')):output.remove(part)
     for i, members in enumerate(groups.values(), 1):
         track=members[0]
@@ -101,13 +105,20 @@ def separate(data, labels, corrections=None):
         original = next(p for p in root.findall('part') if p.get('id') == track['part'])
         descriptor = next(p for p in root.findall('part-list/score-part') if p.get('id') == track['part'])
         part = deepcopy(original);descriptor = deepcopy(descriptor)
-        identifier='ChoralePupitre%d'%i;part.set('id',identifier);descriptor.set('id',identifier)
-        descriptor.find('part-name').text=labels[track['id']].strip()
+        identifier=f'ChoralePupitre{i}';part.set('id',identifier);descriptor.set('id',identifier)
+        part_name = descriptor.find('part-name')
+        if part_name is None:
+            part_name = ET.SubElement(descriptor, 'part-name')
+        part_name.text=labels[track['id']].strip()
         abbreviation=descriptor.find('part-abbreviation')
         if abbreviation is not None:abbreviation.text=labels[track['id']].strip()
         instrument_ids={}
         for j,instrument in enumerate(descriptor.findall('score-instrument'),1):
-            old=instrument.get('id');new='%s-I%d'%(identifier,j);instrument_ids[old]=new;instrument.set('id',new)
+            old=instrument.get('id')
+            new=f'{identifier}-I{j}'
+            if old is not None:
+                instrument_ids[old]=new
+            instrument.set('id',new)
             name=instrument.find('instrument-name')
             if name is not None:name.text=labels[track['id']].strip()
         for instrument in descriptor.findall('midi-instrument'):
@@ -124,7 +135,7 @@ def separate(data, labels, corrections=None):
                             if number and number!=track['staff']:element.remove(attr)
                             elif number:attr.set('number','1')
                 elif element.tag=='note':
-                    key='%s/%d/%d'%(track['part'],mi,ni);ni+=1
+                    key=f'{track["part"]}/{mi}/{ni}';ni+=1
                     targets=corrections.get(key)
                     target=next((m for m in members if targets is not None and m['id'] in targets),None)
                     selected=bool(target) if targets is not None else element.findtext('staff','1')==track['staff'] and element.findtext('voice','1') in member_voices
@@ -134,14 +145,16 @@ def separate(data, labels, corrections=None):
                     source_voice=element.findtext('voice','1')
                     if source_voice not in voices:voices[source_voice]=str(len(voices)+1)
                     chosen_voice=voices[source_voice]
-                    chord=element.find('chord') is not None
+                    chord_element=element.find('chord')
+                    chord=chord_element is not None
                     duration_value=int(element.findtext('duration','0'))
                     if selected:
                         if chord and (not base_selected or base_voice!=chosen_voice):
                             index=list(measure).index(element)
                             if base_duration:
                                 move=ET.Element('backup');ET.SubElement(move,'duration').text=str(base_duration);measure.insert(index,move)
-                            element.remove(element.find('chord'))
+                            if chord_element is not None:
+                                element.remove(chord_element)
                             delta=base_duration-duration_value
                             if delta:
                                 move=ET.Element('forward' if delta>0 else 'backup');ET.SubElement(move,'duration').text=str(abs(delta));measure.insert(list(measure).index(element)+1,move)
@@ -196,7 +209,7 @@ def separate(data, labels, corrections=None):
     if miscellaneous is None:miscellaneous=ET.SubElement(identification,'miscellaneous')
     for field in list(miscellaneous.findall('miscellaneous-field')):
         if field.get('name')=='chorale-grouped-parts':miscellaneous.remove(field)
-    ET.SubElement(miscellaneous,'miscellaneous-field',name='chorale-grouped-parts').text=','.join(p.get('id') for p in output.findall('part'))
+    ET.SubElement(miscellaneous,'miscellaneous-field',name='chorale-grouped-parts').text=','.join(p.get('id', '') for p in output.findall('part'))
     return ET.tostring(output,encoding='utf-8',xml_declaration=True)
 
 

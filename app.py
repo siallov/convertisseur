@@ -2,22 +2,24 @@
 """Local PDF → MusicXML application. Python standard library only."""
 import concurrent.futures
 import json
+import logging
 import math
 import os
-from pathlib import Path
 import re
 import shlex
 import shutil
 import subprocess
 import threading
 import uuid
-import zipfile
-import paheko_upload
-import installation_config
-import pupitres
 import xml.etree.ElementTree as ET
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import quote, unquote, urlparse, urlencode, parse_qs
+from pathlib import Path
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
+
+import installation_config
+import paheko_upload
+import pupitres
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / 'data'
@@ -25,6 +27,7 @@ MAX_BYTES = 80 * 1024 * 1024
 JOBS = {}
 LOCK = threading.Lock()
 POOL = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+LOGGER = logging.getLogger(__name__)
 
 
 def engine_command():
@@ -84,7 +87,7 @@ def job_details(folder):
 
 
 def score_stem(job):
-    title = job.get('title') or re.sub(r'\.pdf$', '', job.get('name', ''), flags=re.I)
+    title = job.get('title') or re.sub(r'\.pdf$', '', job.get('name', ''), flags=re.IGNORECASE)
     if job.get('title'):
         title = ' — '.join(x for x in (title, job.get('composer'), job.get('part') if job.get('part') != 'Ensemble' else '') if x)
     return re.sub(r'[\x00-\x1f/\\:*?"<>|]', '_', title).strip(' .')[:170]
@@ -129,7 +132,7 @@ def pdf_resolution_options(source):
     if not shutil.which('pdfinfo'):
         return []
     result = subprocess.run(['pdfinfo', '-f', '1', '-l', '999999', str(source)],
-                            capture_output=True, text=True, timeout=30)
+                            check=False, capture_output=True, text=True, timeout=30)
     if result.returncode:
         return []
     sizes = re.findall(r'(?:Page\s+\d+\s+size:|Page size:)\s*([\d.]+)\s+x\s+([\d.]+)\s+pts', result.stdout)
@@ -168,7 +171,7 @@ def convert(job_id, command):
         environment = os.environ.copy()
         environment['JAVA_TOOL_OPTIONS'] = (environment.get('JAVA_TOOL_OPTIONS', '') + ' -Djava.awt.headless=true').strip()
         with log.open('w') as stream:
-            result = subprocess.run(command + ['-batch', '-transcribe', '-export'] + resolution_options + ['-output', str(folder / 'output'), '--', str(folder / 'source.pdf')], stdout=stream, stderr=subprocess.STDOUT, timeout=1800, env=environment)
+            result = subprocess.run(command + ['-batch', '-transcribe', '-export'] + resolution_options + ['-output', str(folder / 'output'), '--', str(folder / 'source.pdf')], check=False, stdout=stream, stderr=subprocess.STDOUT, timeout=1800, env=environment)
         if result.returncode:
             code, message, action = diagnose(log.read_text(errors='replace'))
             update(job_id, status='error', error_code=code, message=message + ' Consultez le journal de conversion.', action=action)
@@ -212,7 +215,8 @@ def convert(job_id, command):
 
     except subprocess.TimeoutExpired:
         update(job_id, status='error', message='La conversion a dépassé la limite de 30 minutes.', error_code='timeout', action='Découpez le PDF en plusieurs parties et réimportez une partie.')
-    except Exception as exc:
+    except Exception:
+        LOGGER.exception('Conversion worker failed for job %s', job_id)
         update(job_id, status='error', message='Le traitement de la partition a échoué.', error_code='processing', action='Consultez le journal et réimportez le PDF. Contactez l’administrateur si le problème persiste.')
 
 
@@ -232,6 +236,7 @@ def publish_job(job_id):
         try:
             published = paheko_upload.publish(payload, detailed=True)
         except Exception:
+            LOGGER.exception('Unexpected Paheko publication failure for job %s', job_id)
             published = {'state': 'failed', 'message': 'Envoi vers Paheko impossible.', 'sent': []}
         published = published or {'state': 'disabled', 'message': 'Dépôt Paheko non configuré.', 'sent': []}
         # Only newly uploaded MusicXML files can be linked: existing files may be different scores.
@@ -239,11 +244,15 @@ def publish_job(job_id):
         action = '' if published['state'] == 'sent' else 'Téléchargez vos résultats et ajoutez-les dans Documents/Partitions, ou contactez l’administrateur.'
         if published['state'] == 'existing':
             action = 'Des fichiers de même nom existent déjà. Vérifiez-les dans Documents ou changez le titre avant une nouvelle conversion.'
+        score_url = reader_url(stem)
+        song_id = job.get('song_id')
+        song_url = (score_url.split('?')[0] + '?' + urlencode({'view': 'songs', 'song': song_id})) if song_id and score_url else None
         update(job_id, status='done', message='Conversion terminée. ' + published['message'], files=job['files'],
                upload=published['state'], reader_links=links, action=action,
-               song_url=(reader_url(stem).split('?')[0] + '?' + urlencode({'view': 'songs', 'song': job['song_id']})) if job.get('song_id') and reader_url(stem) else None,
+               song_url=song_url,
                error_code='upload_failed' if published['state'] == 'failed' else '')
     except Exception:
+        LOGGER.exception('Unexpected publication worker failure for job %s', job_id)
         update(job_id, status='review', upload='failed', message='Dépôt impossible. Vos résultats restent disponibles.', error_code='upload_failed', action='Réessayez le dépôt ou téléchargez les fichiers.')
 
 
@@ -317,7 +326,7 @@ class Handler(BaseHTTPRequestHandler):
                 length=int(self.headers.get('Content-Length','0'))
                 if not 0<length<=524288:raise ValueError()
                 values=json.loads(self.rfile.read(length))
-                if not isinstance(values,dict):raise ValueError()
+                if not isinstance(values,dict):raise TypeError()
                 with LOCK:
                     job=JOBS.get(naming_match[1])
                     if not job:return self.json_response(404,{'error':'Conversion introuvable.'})

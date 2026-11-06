@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Assistant local pour une nouvelle installation ; secrets saisis hors du chat."""
+import base64
 import getpass
 import json
 import sys
-import base64
-from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
 import installation_config as settings
 
 
