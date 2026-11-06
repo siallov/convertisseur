@@ -1,0 +1,31 @@
+<!doctype html><html lang="fr"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Vérifier la partition — Chorale</title><style>
+.lp{font:16px/1.45 system-ui,sans-serif;color:#183e36}
+#content{margin:0;padding:0;max-width:none}
+.lp{max-width:1100px;margin:0 auto;padding:12px 16px 40px}
+.lp header{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:baseline;justify-content:space-between}
+.lp h1{font:400 30px Georgia,serif;margin:8px 0}
+.lp a{color:#183e36}
+.lp .muted{color:#627368;font-size:14px}
+.lp button,.lp select{font:inherit;border:1px solid #cfd6c8;background:#edf1e8;color:#183e36;border-radius:20px;padding:8px 14px;cursor:pointer}
+.lp button.primary{background:#183e36;color:#fff;border-color:#183e36}
+.lp button[aria-pressed=true]{background:#183e36;color:#fff}
+.lp button:disabled{opacity:.45;cursor:default}
+#list{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 14px;padding:0;list-style:none}
+#list button{padding:8px 16px}
+.card{background:#fff;border:1px solid #e2e3d9;border-radius:12px;padding:12px;margin:10px 0}
+.card h2{font:400 22px Georgia,serif;margin:0 0 8px}
+.grid{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);gap:14px;align-items:start}
+@media(max-width:820px){.grid{grid-template-columns:1fr}}
+object,iframe.pdf{width:100%;height:72vh;min-height:360px;border:1px solid #e2e3d9;border-radius:8px;background:#fafafa}
+.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+input[type=range]{width:100%;accent-color:#183e36}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:8px 0}
+.row label{display:flex;gap:6px;align-items:center;font-size:14px}
+.tracks{display:grid;gap:6px;margin:8px 0}
+.track{display:flex;gap:8px;align-items:center;justify-content:space-between;border:1px solid #e2e3d9;border-radius:8px;padding:6px 10px}
+.track label{display:flex;gap:8px;align-items:center;min-width:0}
+.track span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pupitre-field{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}.pupitre-field input{width:100%;box-sizing:border-box;padding:8px;font:inherit}.pupitre-field small{display:block}.track button{padding:4px 10px;font-size:13px}
+.msg{padding:8px 12px;border-radius:8px;background:#fbefe9;color:#7a2f1f;margin:8px 0}
+#time{font-variant-numeric:tabular-nums;font-size:14px;color:#627368}
+body{background:#f6f5ef}#notation{background:white;overflow:auto;padding:12px}#notation svg{max-width:100%}.review-head{position:sticky;top:0;background:#f6f5ef;z-index:3;padding:10px 0}#confirmation{padding:16px;background:#e4eee5;border-radius:10px}#confirmation label{display:block;margin:10px 0}</style><main class="lp"><div class="review-head"><a href="/">← Mes conversions</a><h1 id="title">Vérifier et écouter</h1><p id="state" role="status"></p><div class="controls"><button id="play-top" class="primary">▶ Jouer</button><button id="stop-top">⏹ Début</button><span id="time-top"></span></div></div><p>Comparez les notes, les rythmes et les voix au PDF original. L’écoute est synthétique ; reprises et nuances ne sont pas jouées. Vous pouvez corriger l’affectation aux pupitres ; les hauteurs et les rythmes reconnus restent inchangés.</p><label>Résultat <select id="movement"></select></label><p id="render-state" role="status"></p><section id="pupitres-panel" class="card" aria-labelledby="pupitres-title"><h2 id="pupitres-title">Nommer et regrouper les pupitres</h2><p>Écoutez chaque ligne, puis indiquez son pupitre. Donnez exactement le même nom aux lignes à réunir sur une portée et dans un seul contrôle d’écoute (par exemple Ténor, Baryton, Basse 1, Basse 2). Le regroupement concerne les lignes d’une même portée d’origine. La hauteur des notes ne permet pas de deviner sûrement qui chante.</p><p id="pupitres-state" role="status"></p><form id="pupitres-form"><div id="pupitres-fields"></div><datalist id="pupitres-choices"><option>Soprano</option><option>Alto</option><option>Ténor</option><option>Baryton</option><option>Basse</option><option>Accompagnement</option></datalist><button type="button" id="suggest-groups">Proposer le regroupement des lignes bis / ter</button><details><summary>Corriger les notes et silences par mesure</summary><p>Comparez au PDF original. Cochez deux pupitres pour une note ou un silence commun ; pour un accord, affectez chaque note séparément. Les choix concernent la même portée d’origine.</p><label>Mesure d’origine <select id="correction-measure"></select></label><div id="correction-notes"></div></details><button type="submit" id="save-pupitres">Enregistrer les pupitres dans les fichiers</button></form><p class="muted">La séparation utilise les lignes rythmiques reconnues. Des notes mélangées dans une seule ligne ne peuvent pas être réparties automatiquement. Les accords restent ensemble par défaut ; vous pouvez affecter leurs notes séparément dans la correction par mesure.</p></section><label><input type="checkbox" id="follow-score" checked> Suivre la partition pendant l’écoute</label><div id="notation"></div><ul id="list" hidden></ul><div id="stage"></div><div id="confirmation"><label><input id="confirm" type="checkbox"> J’ai vérifié la partition et je souhaite la déposer dans Paheko.</label><button id="publish" class="primary" disabled>Valider et déposer dans Paheko</button><p>Le PDF et tous les résultats de cette conversion seront déposés. Aucun fichier existant ne sera remplacé.</p></div><p id="result-links"></p><p>Vos résultats privés expirent après 24 heures. Téléchargez-les depuis « Mes conversions » si vous devez les corriger dans un éditeur musical.</p></main><script src="/vendor/osmd.js"></script><script src="/score-engine.js?v=affectations-1"></script><script src="/review.js?v=affectations-1"></script></html>

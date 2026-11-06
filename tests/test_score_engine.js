@@ -1,0 +1,13 @@
+'use strict';
+const assert=require('node:assert/strict');
+const engine=require('../static/score-engine.js');
+const seconds=engine.makeSec([{b:0,bpm:120},{b:4,bpm:60},{b:4,bpm:60}]);
+assert.equal(seconds(0),0);assert.equal(seconds(4),2);assert.equal(seconds(6),4);
+const song=engine.buildSong({tracks:[{name:'Alto',notes:[{b:0,d:2,m:60,v:.8}]},{name:'Baryton',notes:[{b:2,d:2,m:48,v:.8}]}],tempo:[{b:0,bpm:120}],totalBeats:8,measures:[{b:0,end:4,number:'1'},{b:4,end:8,number:'2'}]});
+assert.deepEqual(song.tracks,['Alto','Baryton']);assert.equal(song.total,4);assert.equal(song.notes[1].s,1);assert.equal(song.measures[1].s,2);
+let i=0;const timestamps=[0,.25,.5,1];const iterator={get CurrentSourceTimestamp(){return {RealValue:timestamps[Math.min(i,3)]}},get EndReached(){return i>=4}};
+const cursor={Iterator:iterator,cursorElement:{},next(){i++},previous(){i=Math.max(0,i-1)},reset(){i=0},show(){}};
+engine.positionCursor({cursor},song,.6,-1);assert.equal(i,1,'cursor must stay on the sounding entry, not the next note');
+engine.positionCursor({cursor},song,0,.6);assert.equal(i,0,'seeking backwards resets the cursor');
+engine.positionCursor({cursor},song,1.1,0);assert.equal(i,2);
+console.log('Tempo, pupil tracks, trailing rests and cursor seek: OK');
