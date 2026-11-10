@@ -59,15 +59,95 @@ const curPos=()=>playing?Math.max(0,Math.min(song.total,p0+(ctx.currentTime-t0)*
 const fmt=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
 const audible=tr=>solo>=0?tr===solo:!muted.has(tr);
 
-function voice(m,at,dur,vel){
- const f=440*2**((m-69)/12),g=ctx.createGain(),g2=ctx.createGain(),o=ctx.createOscillator(),o2=ctx.createOscillator();
- o.type='triangle';o.frequency.value=f;o2.type='sine';o2.frequency.value=f*2;g2.gain.value=.25;
- o.connect(g);o2.connect(g2);g2.connect(g);g.connect(master);
- const peak=.2*vel,end=at+Math.max(dur,.08),dec=Math.max(at+.03,Math.min(end,at+1)),rel=Math.max(end,dec)+.12;
- g.gain.setValueAtTime(0.0001,at);g.gain.linearRampToValueAtTime(peak,at+.012);
- g.gain.exponentialRampToValueAtTime(peak*.45,dec);g.gain.linearRampToValueAtTime(0.0001,rel);
- o.start(at);o2.start(at);o.stop(rel+.02);o2.stop(rel+.02);
- live.add(o);o.onended=()=>{live.delete(o);try{g.disconnect()}catch(e){}};
+const NOTE_NAMES=['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'];
+const samples={aahs:null,oohs:null,piano:null},samplesLoading={};
+let instrument='choir';
+const isBass=name=>/^(basse?s?|b)$/i.test(String(name||'').normalize('NFD').replace(/[\u0300-\u036f.\s]/g,''));
+function loadSamples(){
+ if(instrument==='piano')loadSampleSet('piano','/vendor/piano.json');
+ loadSampleSet('aahs','/vendor/choir.json');loadSampleSet('oohs','/vendor/oohs.json');
+}
+function loadSampleSet(kind,url){
+ if(samples[kind]||samplesLoading[kind]||!ctx)return;
+ const audio=ctx;
+ samplesLoading[kind]=fetch(url).then(r=>{if(!r.ok)throw new Error();return r.json();}).then(async data=>{
+  const buffers=new Map();
+  await Promise.all(Object.entries(data).map(async([name,b64])=>{
+   const bytes=Uint8Array.from(atob(b64),c=>c.charCodeAt(0));
+   try{const buffer=await audio.decodeAudioData(bytes.buffer);buffers.set(name,{buffer,gain:levelGain(buffer)});}catch(e){}
+  }));
+  if(buffers.size)samples[kind]=buffers;
+ }).catch(()=>{});
+}
+// Samples differ widely in loudness (oohs are quieter than aahs): normalise each one.
+function levelGain(buffer){
+ const data=buffer.getChannelData(0);let sum=0;
+ for(let i=0;i<data.length;i++)sum+=data[i]*data[i];
+ const rms=Math.sqrt(sum/Math.max(1,data.length))||.03;
+ return Math.min(8,Math.max(.5,.045/rms));
+}
+function sampleVoice(kind,m,at,dur,vel){
+ const entry=samples[kind]?.get(NOTE_NAMES[((m%12)+12)%12]+(Math.floor(m/12)-1));
+ if(!entry)return false;
+ const buffer=entry.buffer;
+ const source=ctx.createBufferSource(),g=ctx.createGain();
+ source.buffer=buffer;
+ // Sustain long notes by looping the steady middle of the sample.
+ if(kind!=='piano'&&dur>buffer.duration*.8){source.loop=true;source.loopStart=buffer.duration*.35;source.loopEnd=buffer.duration*.8;}
+ const peak=entry.gain*vel*(kind==='oohs'?1.3:kind==='piano'?.8:1),end=at+Math.max(dur,.1),attack=Math.min(.08,Math.max(.03,dur/3)),rel=end+(kind==='piano'?.3:.2);
+ g.gain.setValueAtTime(0.0001,at);g.gain.linearRampToValueAtTime(peak,at+(kind==='piano'?.005:attack));
+ g.gain.setValueAtTime(peak,Math.max(at+attack,end-.02));g.gain.linearRampToValueAtTime(0.0001,rel);
+ source.connect(g);g.connect(master);source.start(at);source.stop(rel+.02);
+ live.add(source);source.onended=()=>{live.delete(source);try{g.disconnect()}catch(e){}};
+ return true;
+}
+
+function voice(m,at,dur,vel,bass){
+ const kind=instrument==='piano'?'piano':bass?'oohs':'aahs';
+ if(sampleVoice(kind,m,at,dur,vel)||(kind!=='aahs'&&sampleVoice('aahs',m,at,dur,vel)))return;
+ // Choir-like timbre: two detuned sawtooth oscillators through a low-pass filter, with gentle vibrato.
+ const f=440*2**((m-69)/12),g=ctx.createGain(),filter=ctx.createBiquadFilter(),lfo=ctx.createOscillator(),depth=ctx.createGain();
+ filter.type='lowpass';filter.frequency.value=Math.min(3000,Math.max(700,f*3.5));filter.Q.value=.6;
+ lfo.frequency.value=5.2;depth.gain.value=7;lfo.connect(depth);
+ const oscillators=[-7,7].map(cents=>{const o=ctx.createOscillator();o.type='sawtooth';o.frequency.value=f;o.detune.value=cents;depth.connect(o.detune);o.connect(filter);return o;});
+ filter.connect(g);g.connect(master);
+ const peak=.09*vel,end=at+Math.max(dur,.1),attack=Math.min(.09,Math.max(.03,dur/3)),rel=end+.18;
+ g.gain.setValueAtTime(0.0001,at);g.gain.linearRampToValueAtTime(peak,at+attack);
+ g.gain.setValueAtTime(peak,Math.max(at+attack,end-.02));g.gain.linearRampToValueAtTime(0.0001,rel);
+ lfo.start(at);lfo.stop(rel+.02);
+ for(const o of oscillators){o.start(at);o.stop(rel+.02);live.add(o);}
+ oscillators[0].onended=()=>{for(const o of oscillators)live.delete(o);try{g.disconnect()}catch(e){}};
+}
+
+let speechOn=false,speechVol=.8,widx=0,frenchVoiceCache=null;
+const spoken=new Set(),speechTimers=new Set();
+const speechSupported='speechSynthesis' in window&&'SpeechSynthesisUtterance' in window;
+function frenchVoice(){
+ if(frenchVoiceCache)return frenchVoiceCache;
+ const voices=speechSynthesis.getVoices().filter(v=>/^fr/i.test(v.lang));
+ return frenchVoiceCache=voices.find(v=>/^fr-FR/i.test(v.lang))||voices[0]||null;
+}
+function say(word){
+ if(!playing||!speechOn)return;
+ const u=new SpeechSynthesisUtterance(word.text);u.lang='fr-FR';
+ const voiceChoice=frenchVoice();if(voiceChoice)u.voice=voiceChoice;
+ u.volume=speechVol;
+ // Fit the spoken word to the length of its note, within a natural range.
+ u.rate=Math.min(2.5,Math.max(.8,(.12*word.text.length+.2)/Math.max(.15,(word.e-word.s)/rate)));
+ speechSynthesis.cancel();speechSynthesis.speak(u);
+}
+function scheduleWords(now){
+ const words=song.words||[];
+ while(widx<words.length&&words[widx].s<now+1.2*rate){
+  const w=words[widx++];
+  if(!speechOn||w.e<=now||!audible(w.tr)||(trackVolumes[w.tr]??1)<=0)continue;
+  // Voices usually sing the same words together: speak each moment only once.
+  const bucket=Math.round(w.s*20);
+  if(spoken.has(bucket))continue;
+  spoken.add(bucket);
+  const delay=Math.max(0,t0+(Math.max(w.s,now)-p0)/rate-ctx.currentTime)*1000;
+  const timer=setTimeout(()=>{speechTimers.delete(timer);say(w)},delay);speechTimers.add(timer);
+ }
 }
 
 function pump(){
@@ -77,15 +157,18 @@ function pump(){
   const n=song.notes[idx++];
   if(!audible(n.tr)||(trackVolumes[n.tr]??1)<=0||n.e<=now)continue;
   const from=Math.max(n.s,now),at=Math.max(ctx.currentTime,t0+(from-p0)/rate);
-  voice(n.m,at,(n.e-from)/rate,n.v*(trackVolumes[n.tr]??1));
+  voice(n.m,at,(n.e-from)/rate,n.v*(trackVolumes[n.tr]??1),isBass(song.tracks[n.tr]));
  }
+ scheduleWords(now);
  updateUi();
  if(now>=song.total){pos=song.total;halt();updateUi()}
 }
 
 async function audio(){
- if(!ctx){const AC=window.AudioContext||window.webkitAudioContext;if(!AC)throw new Error('Audio non pris en charge dans ce navigateur.');ctx=new AC()}
+ if(!ctx){const AC=window.AudioContext||window.webkitAudioContext;if(!AC)throw new Error('Audio non pris en charge dans ce navigateur.');ctx=new AC();loadSamples()}
  await ctx.resume();
+ // Start with the real voices rather than the synthetic fallback, which would mix timbres.
+ await Promise.race([Promise.all(Object.values(samplesLoading)),new Promise(done=>setTimeout(done,10000))]);
 }
 
 async function play(){
@@ -94,12 +177,14 @@ async function play(){
  if(playing)return;
  if(pos>=song.total-.05)pos=0;
  master=ctx.createGain();master.gain.value=vol;master.connect(ctx.destination);
- p0=pos;t0=ctx.currentTime+.08;idx=0;playing=true;
+ p0=pos;t0=ctx.currentTime+.08;idx=0;widx=0;spoken.clear();playing=true;
  timer=setInterval(pump,150);pump();updateUi();
 }
 
 function halt(){
  playing=false;clearInterval(timer);
+ for(const t of speechTimers)clearTimeout(t);
+ speechTimers.clear();if(speechSupported)speechSynthesis.cancel();
  if(master){try{master.disconnect()}catch(e){}master=null}
  for(const o of live){try{o.stop()}catch(e){}}
  live.clear();
@@ -140,9 +225,53 @@ function showScore(key){
  right.innerHTML='<p class="muted" id="loading">Chargement du son…</p>';
  const useMidi=!g.musicxml&&!!g.mid;const url=g.musicxml||g.mid;
  fetch(url).then(r=>{if(!r.ok)throw new Error('Fichier introuvable ('+r.status+').');return useMidi?r.arrayBuffer():r.text()})
-  .then(d=>buildSong(useMidi?parseMidi(d):parseXml(d)))
+  .then(d=>{const parsed=useMidi?parseMidi(d):parseXml(d),built=buildSong(parsed);built.words=useMidi?[]:parseLyrics(d,parsed,built);return built;})
   .then(s=>{if(token!==loadToken)return;song=s;buildPlayer(right)})
   .catch(e=>{if(token!==loadToken)return;right.replaceChildren();const m=document.createElement('div');m.className='msg';m.textContent=e.message;right.append(m)});
+}
+
+function parseLyrics(text,parsed,built){
+ const doc=new DOMParser().parseFromString(text,'application/xml');
+ const kids=(el,n)=>[...el.children].filter(c=>c.nodeName===n),first=(el,n)=>kids(el,n)[0];
+ const grouped=new Set((doc.querySelector('identification > miscellaneous > miscellaneous-field[name="chorale-grouped-parts"]')?.textContent||'').split(',').filter(Boolean));
+ const syllables=[];
+ for(const part of kids(doc.documentElement,'part')){
+  const partId=part.getAttribute('id');let divisions=1;
+  kids(part,'measure').forEach((measure,mi)=>{
+   const base=parsed.measures?.[mi]?.b;if(base===undefined)return;
+   let q=0,last=0;
+   for(const el of measure.children){
+    const length=()=>Number(first(el,'duration')?.textContent||0)/divisions;
+    if(el.nodeName==='attributes'){const v=Number(first(el,'divisions')?.textContent);if(v>0)divisions=v;}
+    else if(el.nodeName==='backup')q-=length();
+    else if(el.nodeName==='forward')q+=length();
+    else if(el.nodeName==='note'){
+     if(first(el,'grace'))continue;
+     const chord=!!first(el,'chord'),start=chord?last:q,duration=length();
+     const lyric=first(el,'lyric'),word=lyric&&first(lyric,'text')?.textContent?.trim();
+     if(word&&first(el,'pitch')&&!first(el,'rest')){
+      const key=partId+'/'+(first(el,'staff')?.textContent||'1')+'/'+(first(el,'voice')?.textContent||'1');
+      const tr=parsed.tracks.findIndex(t=>t.id===key||(grouped.has(partId)&&t.part===partId));
+      if(tr>=0)syllables.push({tr,s:built.seconds(base+start),e:built.seconds(base+start+duration),text:word,kind:first(lyric,'syllabic')?.textContent||'single'});
+     }
+     if(!chord){last=q;q+=duration;}
+    }
+   }
+  });
+ }
+ const clean=t=>t.replace(/[‐‑–—-]+$/,'').replace(/[‘’`´]/g,"'").trim();
+ const words=[];
+ for(const tr of new Set(syllables.map(x=>x.tr))){
+  let current=null;
+  for(const syl of syllables.filter(x=>x.tr===tr).sort((a,b)=>a.s-b.s)){
+   const t=clean(syl.text);if(!t)continue;
+   if(current&&(syl.kind==='middle'||syl.kind==='end')){current.text+=t;current.e=syl.e;}
+   else{if(current)words.push(current);current={tr,s:syl.s,e:syl.e,text:t};}
+   if(syl.kind==='end'||syl.kind==='single'){words.push(current);current=null;}
+  }
+  if(current)words.push(current);
+ }
+ return words.sort((a,b)=>a.s-b.s);
 }
 
 function buildPlayer(box){
@@ -150,15 +279,22 @@ function buildPlayer(box){
  const html=`<div class="controls"><button class="primary" id="play">▶ Jouer</button><button id="stopb">⏹ Début</button><span id="time"></span></div>
 <input type="range" id="seek" min="0" max="${song.total}" step="0.1" value="0" aria-label="Position">
 <div class="row"><label>Vitesse <select id="rate"><option value="0.5">50 %</option><option value="0.75">75 %</option><option value="0.9">90 %</option><option value="1" selected>100 %</option><option value="1.15">115 %</option></select></label>
-<label>Volume <input type="range" id="vol" min="0" max="1" step="0.05" value="${vol}" style="width:110px"></label></div>
+<label>Son des notes <select id="sound"><option value="choir">Voix chorale</option><option value="piano">Piano</option></select></label>
+<label>Volume des notes <input type="range" id="vol" min="0" max="1" step="0.05" value="${vol}" style="width:110px"></label></div>
+<div class="row"${speechSupported?'':' hidden'}><label><input type="checkbox" id="speech"${speechOn?' checked':''}> Lire les paroles (voix parlée)</label>
+<label>Volume des paroles <input type="range" id="speech-vol" min="0" max="1" step="0.05" value="${speechVol}" style="width:110px"></label></div>
 <p class="muted">Pupitres à entendre (« seul » pour travailler le vôtre) :</p><div class="tracks" id="tracks"></div>
-<p class="muted">Son synthétique. Les reprises et les nuances de la partition ne sont pas jouées.</p>`;
+<p class="muted">Les paroles parlées utilisent la voix du navigateur. Les reprises et les nuances de la partition ne sont pas jouées.</p>`;
  box.innerHTML=html;
  $('#play').onclick=()=>{(playing?Promise.resolve(pause()):play()).catch(e=>alert(e.message))};
  $('#stopb').onclick=()=>stop(true);
  $('#seek').oninput=e=>{pos=+e.target.value;if(playing){halt();play().catch(err=>alert(err.message))}else updateUi()};
  $('#rate').onchange=e=>{const cur=curPos();rate=+e.target.value;if(playing){pos=cur;halt();play()}else updateUi()};
  $('#vol').oninput=e=>{vol=+e.target.value;if(master)master.gain.value=vol};
+ $('#sound').value=instrument;
+ $('#sound').onchange=e=>{instrument=e.target.value;if(ctx)loadSamples();restart()};
+ $('#speech').onchange=e=>{speechOn=e.target.checked;if(!speechOn&&speechSupported){for(const t of speechTimers)clearTimeout(t);speechTimers.clear();speechSynthesis.cancel();}else if(playing)restart()};
+ $('#speech-vol').oninput=e=>{speechVol=+e.target.value};
  const tb=$('#tracks');
  song.tracks.forEach((name,i)=>{
   const row=document.createElement('div');row.className='track';
@@ -240,9 +376,18 @@ function renderCorrections(){
   const reset=document.createElement('button');reset.type='button';reset.textContent='Affectation d’origine';reset.onclick=()=>{delete correctionDraft[note.id];correctionChanged();renderCorrections();};row.append(reset);box.append(row);
  }
 }
+function canonicalVoice(name){
+ const key=name.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/0/g,'o').replace(/1/g,'i').replace(/[^a-z]/g,'');
+ if(/^(s|sop)/.test(key))return 'Soprano';
+ if(/^(a|alt)/.test(key))return 'Alto';
+ if(/^(t|ten)/.test(key))return 'Ténor';
+ if(/^bas/.test(key)||key==='b')return 'Basse';
+ if(/^ba/.test(key))return 'Baryton';
+ return null;
+}
 $('#suggest-groups').addEventListener('click',()=>{
- let changed=0;for(const input of $('#pupitres-fields').querySelectorAll('input[data-track]')){const name=input.value.replace(/\s+(bis|ter)\s*$/i,'').trim();if(name!==input.value){input.value=name;input.dispatchEvent(new Event('input',{bubbles:true}));changed++;}}
- $('#pupitres-state').textContent=changed?'Regroupement proposé : vérifiez les noms puis enregistrez. Aucune note n’a encore été modifiée.':'Aucun nom terminé par bis ou ter. Saisissez le même nom pour les lignes à réunir.';
+ let changed=0;for(const input of $('#pupitres-fields').querySelectorAll('input[data-track]')){const cleaned=input.value.replace(/\s+(bis|ter)\s*$/i,'').trim();const name=canonicalVoice(cleaned)||cleaned;if(name!==input.value){input.value=name;input.dispatchEvent(new Event('input',{bubbles:true}));changed++;}}
+ $('#pupitres-state').textContent=changed?'Regroupement proposé : vérifiez les noms puis enregistrez. Aucune note n’a encore été modifiée.':'Aucun nom à regrouper automatiquement. Saisissez le même nom pour les lignes à réunir.';
 });
 $('#pupitres-form').addEventListener('submit',async event=>{
  event.preventDefault();if(nameSaving)return;

@@ -127,6 +127,14 @@ def update(job_id, **values):
                 pass
 
 
+def ocr_language_options():
+    """Read lyrics as French by default; AUDIVERIS_OCR_LANGUAGES overrides, e.g. fra+eng."""
+    languages = os.environ.get('AUDIVERIS_OCR_LANGUAGES', 'fra').strip()
+    if not re.fullmatch(r'[a-z]{3}(\+[a-z]{3})*', languages):
+        return []
+    return ['-constant', f'org.audiveris.omr.text.Language.defaultSpecification={languages}']
+
+
 def pdf_resolution_options(source):
     """Keep rendered pages below Audiveris's 20 million pixel limit."""
     if not shutil.which('pdfinfo'):
@@ -171,7 +179,7 @@ def convert(job_id, command):
         environment = os.environ.copy()
         environment['JAVA_TOOL_OPTIONS'] = (environment.get('JAVA_TOOL_OPTIONS', '') + ' -Djava.awt.headless=true').strip()
         with log.open('w') as stream:
-            result = subprocess.run(command + ['-batch', '-transcribe', '-export'] + resolution_options + ['-output', str(folder / 'output'), '--', str(folder / 'source.pdf')], check=False, stdout=stream, stderr=subprocess.STDOUT, timeout=1800, env=environment)
+            result = subprocess.run(command + ['-batch', '-transcribe', '-export'] + resolution_options + ocr_language_options() + ['-output', str(folder / 'output'), '--', str(folder / 'source.pdf')], check=False, stdout=stream, stderr=subprocess.STDOUT, timeout=1800, env=environment)
         if result.returncode:
             code, message, action = diagnose(log.read_text(errors='replace'))
             update(job_id, status='error', error_code=code, message=message + ' Consultez le journal de conversion.', action=action)
@@ -309,7 +317,7 @@ class Handler(BaseHTTPRequestHandler):
                 mime = 'application/pdf' if filename.endswith('.pdf') else 'text/plain; charset=utf-8' if filename.endswith('.log') else 'application/vnd.recordare.musicxml+xml' if filename.endswith('.musicxml') else 'application/vnd.recordare.musicxml'
                 return self.file_response(DATA / job_id / filename, mime, filename != 'source.pdf', download_name(job, filename))
             return self.json_response(200, dict(id=job_id, **job))
-        assets = {'/score-engine.js': ('score-engine.js', 'text/javascript; charset=utf-8'), '/preview': ('preview.html', 'text/html; charset=utf-8'), '/review.js': ('review.js', 'text/javascript; charset=utf-8'), '/vendor/osmd.js': ('vendor/opensheetmusicdisplay.min.js', 'text/javascript; charset=utf-8'), '/admin.js': ('admin.js', 'text/javascript; charset=utf-8'), '/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8')}
+        assets = {'/score-engine.js': ('score-engine.js', 'text/javascript; charset=utf-8'), '/preview': ('preview.html', 'text/html; charset=utf-8'), '/review.js': ('review.js', 'text/javascript; charset=utf-8'), '/vendor/piano.json': ('vendor/piano.json', 'application/json'), '/vendor/oohs.json': ('vendor/voice_oohs.json', 'application/json'), '/vendor/choir.json': ('vendor/choir_aahs.json', 'application/json'), '/vendor/osmd.js': ('vendor/opensheetmusicdisplay.min.js', 'text/javascript; charset=utf-8'), '/admin.js': ('admin.js', 'text/javascript; charset=utf-8'), '/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8')}
         if path in assets:
             filename, mime = assets[path]
             return self.file_response(ROOT / 'static' / filename, mime)

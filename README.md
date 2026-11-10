@@ -14,6 +14,8 @@ Application locale en français, sans dépendance Python externe. Import PDF par
    # export AUDIVERIS_CMD='java -jar /chemin/vers/Audiveris.jar'
    ```
 
+   Les paroles sont lues en français (`fra`). Pour une autre langue : `export AUDIVERIS_OCR_LANGUAGES='fra+eng'` (langues installées dans Audiveris).
+
 4. Dans ce dossier, lancez :
 
    ```bash

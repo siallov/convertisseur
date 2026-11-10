@@ -1,0 +1,5 @@
+choir_aahs.json, voice_oohs.json et piano.json : échantillons « Choir Aahs », « Voice Oohs » et « Acoustic Grand Piano » extraits de FluidR3_GM.sf2
+(Frank Wen), convertis par gleitz/midi-js-soundfonts
+(https://github.com/gleitz/midi-js-soundfonts).
+Licence : Creative Commons Attribution 3.0 (https://creativecommons.org/licenses/by/3.0/us/).
+Les échantillons ont été conservés tels quels, convertis au format JSON.

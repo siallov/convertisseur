@@ -70,8 +70,40 @@ def validate_corrections(data,tracks,corrections):
         if len(set(targets))!=len(targets):raise ValueError('Pupitre répété.')
         note=notes[key]
         for target in targets:
-            if target not in known or (known[target]['part'],known[target]['staff'])!=(note['part'],note['staff']):
-                raise ValueError('Choisissez des pupitres de la même portée d’origine.')
+            if target not in known or known[target]['part']!=note['part']:
+                raise ValueError('Choisissez des pupitres de la même partie d’origine.')
+
+
+def merge_parts(root, members):
+    """Copy the notes of the other parts into the first member's part, on their own voices."""
+    base_id=members[0]['part']
+    base=deepcopy(next(p for p in root.findall('part') if p.get('id')==base_id))
+    measures=base.findall('measure')
+    for part_id in dict.fromkeys(m['part'] for m in members if m['part']!=base_id):
+        source=next(p for p in root.findall('part') if p.get('id')==part_id)
+        for measure,other in zip(measures,source.findall('measure')):
+            position=0
+            for element in measure:
+                duration=int(element.findtext('duration','0'))
+                if element.tag=='note' and element.find('chord') is None:position+=duration
+                elif element.tag=='forward':position+=duration
+                elif element.tag=='backup':position-=duration
+            added=[deepcopy(el) for el in other if el.tag in ('note','forward','backup')]
+            if not added:continue
+            for element in added:
+                voice=element.find('voice')
+                if element.tag=='note':
+                    if voice is None:
+                        voice=ET.Element('voice');duration=element.find('duration')
+                        element.insert(list(element).index(duration)+1 if duration is not None else 0,voice)
+                    voice.text=f'{part_id}:{voice.text or "1"}'
+            if position>0:
+                move=ET.Element('backup');ET.SubElement(move,'duration').text=str(position);added.insert(0,move)
+            at=len(measure)
+            while at>0 and measure[at-1].tag=='barline':at-=1
+            for offset,element in enumerate(added):measure.insert(at+offset,element)
+    merged=[dict(m,part=base_id,voice=f"{m['part']}:{m['voice']}") if m['part']!=base_id else m for m in members]
+    return base,merged
 
 
 def separate(data, labels, corrections=None):
@@ -89,8 +121,6 @@ def separate(data, labels, corrections=None):
         label=labels[track['id']].strip()
         key=label.casefold()
         group=groups.setdefault(key,[])
-        if group and (group[0]['part'],group[0]['staff'])!=(track['part'],track['staff']):
-            raise ValueError('Le regroupement exige des lignes de la même portée d’origine. Utilisez des noms distincts pour les autres portées.')
         group.append(track)
     root = parse(data); output = deepcopy(root)
     part_list = output.find('part-list')
@@ -100,9 +130,10 @@ def separate(data, labels, corrections=None):
     for part in list(output.findall('part')):output.remove(part)
     for i, members in enumerate(groups.values(), 1):
         track=members[0]
-        voices={member['voice']:str(index) for index,member in enumerate(members,1)}
-        member_voices=set(voices)
         original = next(p for p in root.findall('part') if p.get('id') == track['part'])
+        if len({member['part'] for member in members})>1:original,members=merge_parts(root,members)
+        voices={(member['staff'],member['voice']):str(index) for index,member in enumerate(members,1)}
+        member_voices=set(voices)
         descriptor = next(p for p in root.findall('part-list/score-part') if p.get('id') == track['part'])
         part = deepcopy(original);descriptor = deepcopy(descriptor)
         identifier=f'ChoralePupitre{i}';part.set('id',identifier);descriptor.set('id',identifier)
@@ -138,11 +169,12 @@ def separate(data, labels, corrections=None):
                     key=f'{track["part"]}/{mi}/{ni}';ni+=1
                     targets=corrections.get(key)
                     target=next((m for m in members if targets is not None and m['id'] in targets),None)
-                    selected=bool(target) if targets is not None else element.findtext('staff','1')==track['staff'] and element.findtext('voice','1') in member_voices
+                    source_key=(element.findtext('staff','1'),element.findtext('voice','1'))
+                    selected=bool(target) if targets is not None else source_key in member_voices
                     # Preserve independent rhythmic voices when a note is moved
                     # onto another group. Reusing the target's existing voice
                     # would make a rest and an assigned note overlap in one voice.
-                    source_voice=element.findtext('voice','1')
+                    source_voice=source_key
                     if source_voice not in voices:voices[source_voice]=str(len(voices)+1)
                     chosen_voice=voices[source_voice]
                     chord_element=element.find('chord')

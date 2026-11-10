@@ -39,7 +39,7 @@ Dans « Nommer et regrouper les pupitres », donnez le même nom aux lignes à r
 
 Le bouton « Proposer le regroupement des lignes bis / ter » enlève uniquement les suffixes bis et ter dans les champs. Vérifiez les affectations puis cliquez sur « Enregistrer les pupitres dans les fichiers ». La proposition ne modifie aucun fichier avant cet enregistrement. Aucun regroupement par hauteur n’est effectué.
 
-Le regroupement est limité aux voix d’une même portée d’origine ; les lignes provenant d’autres portées doivent garder des noms distincts. Les exports XML et MXL sont mis à jour ensemble. Pour annuler un regroupement, attribuez à nouveau des noms distincts : la transformation repart toujours du MusicXML original conservé.
+Le regroupement est possible entre portées et entre parties d’origine ; les notes sont réunies dans une seule portée (une voix par ligne). Les exports XML et MXL sont mis à jour ensemble. Pour annuler un regroupement, attribuez à nouveau des noms distincts : la transformation repart toujours du MusicXML original conservé.
 
 
 ## Notes et silences communs ; accords mal affectés

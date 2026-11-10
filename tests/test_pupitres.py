@@ -62,10 +62,24 @@ class PupitreTests(unittest.TestCase):
             self.assertEqual(len(ET.parse(folder/'partition-1.musicxml').findall('part')),2)
             self.assertEqual((folder/'originals/partition-1.musicxml').read_bytes(),SCORE)
 
-    def test_grouping_different_source_staves_is_rejected(self):
+    def test_grouping_different_staves_of_same_part(self):
         source=SCORE.replace(b'<voice>2</voice>',b'<voice>2</voice><staff>2</staff>')
-        with self.assertRaisesRegex(ValueError,'même portée'):
-            pupitres.separate(source,{'P1/1/1':'Ténor','P1/2/2':'Ténor'})
+        root=ET.fromstring(pupitres.separate(source,{'P1/1/1':'Ténor','P1/2/2':'Ténor'}))
+        parts=root.findall('part')
+        self.assertEqual(len(parts),1)
+        self.assertEqual(len([n for n in parts[0].iter('note') if n.find('pitch') is not None]),
+                         len([n for n in ET.fromstring(source).iter('note') if n.find('pitch') is not None]))
+        self.assertEqual({n.findtext('staff','1') for n in parts[0].iter('note')},{'1'})
+
+    def test_grouping_different_parts_merges_notes(self):
+        source=SCORE.replace(b'</part-list>',b'<score-part id="P2"><part-name>B</part-name></score-part></part-list>')
+        source=source.replace(b'</score-partwise>',b'<part id="P2"><measure number="1"><attributes><divisions>1</divisions></attributes><note><pitch><step>C</step><octave>3</octave></pitch><duration>4</duration><voice>1</voice></note></measure></part></score-partwise>')
+        root=ET.fromstring(pupitres.separate(source,{'P1/1/1':'Ténor','P1/1/2':'Alto','P2/1/1':'Ténor'}))
+        parts=root.findall('part')
+        self.assertEqual([p.findtext('part-name') for p in root.findall('part-list/score-part')],['Ténor','Alto'])
+        pitches=[(n.findtext('pitch/step'),n.findtext('pitch/octave')) for n in parts[0].iter('note') if n.find('pitch') is not None]
+        self.assertIn(('C','3'),pitches)
+        self.assertEqual(len(parts),2)
 
     def test_separation_preserves_pitches_onsets_rests_and_measure_duration(self):
         tracks=pupitres.discover(SCORE)
