@@ -4,3 +4,4 @@ data/
 __pycache__/
 *.pyc
 .ai-code-tracker.json
+.venv/

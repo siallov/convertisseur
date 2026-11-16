@@ -1,0 +1,22 @@
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Partition — Extraire les paroles</title><link rel="stylesheet" href="/style.css"></head><body>
+<aside><a class="brand" href="/">♮ <span>partition<span class="dot">.</span></span></a><a class="nav" href="/">▧ &nbsp; Convertir une partition</a><a class="nav active" href="/paroles" aria-current="page">¶ &nbsp; Extraire les paroles</a><div class="aside-bottom">VOTRE ATELIER MUSICAL<p>De la page aux notes.<br>Et de nouvelles possibilités.</p><span>Traitement sur cet ordinateur</span></div></aside>
+<main class="lyrics-page"><header><span>ATELIER / PAROLES</span><span id="lyrics-status" class="badge">Vérification…</span></header>
+<section class="intro"><div class="eyebrow">EXTRACTEUR DE PAROLES</div><h1>Les paroles, d’un côté<span>.</span><br>La musique, de l’autre.</h1><p>Récupérez le texte d’une partition PDF et obtenez une copie de la partition sans les paroles.<br>Le PDF d’origine n’est jamais modifié.</p></section>
+<section class="card" id="import-card"><div class="card-title"><span class="number">01</span><h2>Votre partition</h2><span class="small">PDF numérique ou scanné</span></div>
+<label id="drop" class="drop" tabindex="0"><input id="file" type="file" accept="application/pdf,.pdf" hidden><span class="upload">↥</span><strong>Déposez votre partition ici</strong><span>ou <u>parcourez vos fichiers</u></span><small>PDF uniquement · 80 Mo maximum</small></label>
+<p id="notice" role="status" aria-live="polite">Les PDF exportés par MuseScore, Sibelius, Finale… donnent un texte exact. Les scans passent par la reconnaissance de texte : relisez le résultat.</p></section>
+<div id="workspace" class="lyrics-workspace" hidden>
+<section class="card lyrics-options"><div class="card-title"><span class="number">02</span><h2>Ce qui est pris comme paroles</h2></div>
+<h3>Styles de texte</h3><p class="hint">Le style le plus fréquent est coché d’office : ce sont en général les paroles.</p><div id="styles" class="choice-list"></div>
+<label class="check"><input type="checkbox" id="ignore-margin" checked> Ignorer les noms à gauche des portées</label>
+<h3>Portées à inclure dans le texte</h3><p class="hint">Toutes les paroles surlignées sont retirées du PDF ; seules les portées cochées vont dans le texte.</p><div id="voices" class="choice-list"></div>
+<h3>Présentation</h3><label class="check"><input type="checkbox" id="by-verse" checked> Regrouper par couplet</label><label class="check"><input type="checkbox" id="strip-numbers" checked> Retirer les numéros de couplet</label></section>
+<section class="card lyrics-viewer"><div class="card-title"><span class="number">03</span><h2>Aperçu</h2><span class="small" id="page-label"></span></div>
+<div class="viewer-tools"><button type="button" id="prev" aria-label="Page précédente">‹</button><button type="button" id="next" aria-label="Page suivante">›</button><button type="button" id="zoom-out" aria-label="Réduire">−</button><button type="button" id="zoom-in" aria-label="Agrandir">+</button><label class="check"><input type="checkbox" id="show-result"> Aperçu sans paroles</label></div>
+<p class="hint">En rouge : les paroles. En pointillés bleus : les autres textes. Cliquez sur un mot pour l’ajouter ou le retirer.</p>
+<div id="page" class="page-view"><img id="page-image" alt="Page de la partition"><div id="boxes"></div></div></section>
+<section class="card lyrics-text"><div class="card-title"><span class="number">04</span><h2>Texte des paroles</h2></div>
+<textarea id="text" spellcheck="true" aria-label="Texte des paroles"></textarea><p id="edited" class="hint" hidden>Texte modifié à la main : il n’est plus recalculé. <button type="button" id="regenerate" class="link-button">Régénérer</button></p>
+<button type="button" id="save-text">Télécharger le texte (.txt)</button><button type="button" id="save-pdf" class="secondary">Télécharger le PDF sans paroles</button><p id="save-notice" class="hint" role="status" aria-live="polite"></p></section>
+</div>
+<footer><span>Un PDF. Des paroles. Une partition propre.</span><span>Tout le traitement a lieu sur cet ordinateur, sans connexion.</span></footer></main><script src="/paroles.js"></script></body></html>

@@ -3,7 +3,7 @@
   "configurations": [
     {
       "name": "convertisseur",
-      "runtimeExecutable": "python3",
+      "runtimeExecutable": ".venv/bin/python",
       "runtimeArgs": ["app.py"],
       "port": 8765
     }

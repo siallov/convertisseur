@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 import installation_config
 import paheko_upload
+import paroles
 import pupitres
 
 ROOT = Path(__file__).resolve().parent
@@ -526,7 +527,10 @@ ASSETS = {
     '/vendor/oohs.json': ('vendor/voice_oohs.json', 'application/json'),
     '/vendor/choir.json': ('vendor/choir_aahs.json', 'application/json'),
     '/vendor/osmd.js': ('vendor/opensheetmusicdisplay.min.js', 'text/javascript; charset=utf-8'),
+    '/paroles': ('paroles.html', 'text/html; charset=utf-8'),
+    '/paroles.js': ('paroles.js', 'text/javascript; charset=utf-8'),
 }
+PAROLES_PATH = re.compile(r'/api/paroles/([a-f0-9]{32})(?:/(page|apercu)/(\d{1,4})|/(calcul|pdf))?')
 FILE_TYPES = {
     '.pdf': 'application/pdf',
     '.log': 'text/plain; charset=utf-8',
@@ -564,7 +568,81 @@ class Handler(BaseHTTPRequestHandler):
         with path.open('rb') as stream:
             shutil.copyfileobj(stream, self.wfile)
 
+    def bytes_response(self, body, mime, download_name=None, headers=None):
+        self.send_response(200)
+        self.send_header('Content-Type', mime)
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
+        if download_name:
+            fallback = re.sub(r'[^A-Za-z0-9._ -]', '_', download_name)
+            self.send_header('Content-Disposition', f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(download_name)}")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def paroles_request(self, post):
+        """Routes of the « Paroles » tab. Returns True when the request was handled."""
+        url = urlparse(self.path)
+        if not url.path.startswith('/api/paroles'):
+            return False
+        if url.path == '/api/paroles/statut' and not post:
+            self.json_response(200, paroles.status())
+            return True
+        if not paroles.available():
+            self.json_response(503, {'error': 'L’extracteur de paroles n’est pas installé sur cet ordinateur.'})
+            return True
+        owner = getattr(self, 'user', None)
+        if url.path == '/api/paroles' and post:
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+            except ValueError:
+                length = 0
+            if not 0 < length <= MAX_BYTES:
+                self.json_response(413, {'error': 'Sélectionnez un PDF de moins de 80 Mo.'})
+                return True
+            content = self.rfile.read(length)
+            if len(content) != length or not content.startswith(b'%PDF-'):
+                self.json_response(400, {'error': 'Ce fichier n’est pas un PDF valide.'})
+                return True
+            name = unquote(self.headers.get('X-Filename', 'partition.pdf'))
+            self.json_response(200, {'id': paroles.create(DATA, content, name, owner)})
+            return True
+        match = PAROLES_PATH.fullmatch(url.path)
+        session = paroles.get(match[1], owner) if match else None
+        if session is None:
+            self.json_response(404, {'error': 'Analyse introuvable ou expirée. Importez de nouveau le PDF.'})
+            return True
+        kind, number, action = match[2], match[3], match[4]
+        if not kind and not action and not post:
+            self.json_response(200, paroles.describe(session))
+            return True
+        if session['state'] != 'ready':
+            self.json_response(409, {'error': 'L’analyse n’est pas terminée.'})
+            return True
+        zoom = parse_qs(url.query).get('zoom', ['1.5'])[0]
+        try:
+            selection = paroles.read_selection(self) if post else None
+            if kind == 'page' and not post:
+                self.bytes_response(paroles.page_png(session, int(number), float(zoom)), 'image/png')
+            elif kind == 'apercu' and post:
+                self.bytes_response(paroles.page_png(session, int(number), float(zoom), selection), 'image/png')
+            elif action == 'calcul' and post:
+                self.json_response(200, paroles.compute(session, selection))
+            elif action == 'pdf' and post:
+                body, left = paroles.pdf_without_lyrics(session, selection)
+                stem = re.sub(r'\.pdf$', '', session['name'], flags=re.IGNORECASE) or 'partition'
+                self.bytes_response(body, 'application/pdf', f'{stem}_sans_paroles.pdf', {'X-Remaining': str(left)})
+            else:
+                self.json_response(404, {'error': 'Page introuvable.'})
+        except (ValueError, TypeError, KeyError) as error:
+            message = str(error) if str(error).startswith('Aucune') else 'Requête invalide.'
+            self.json_response(400, {'error': message})
+        return True
+
     def do_GET(self):
+        if self.paroles_request(post=False):
+            return
         path = urlparse(self.path).path
         if path == '/api/config':
             return self.json_response(200, installation_config.public())
@@ -607,6 +685,8 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get('Origin')
         if origin and origin != f'http://{self.headers.get("Host")}':
             return self.json_response(403, {'error': 'Origine refusée.'})
+        if self.paroles_request(post=True):
+            return
         naming_match = re.fullmatch(r'/api/jobs/([a-f0-9]{32})/pupitres', urlparse(self.path).path)
         if naming_match:
             try:
