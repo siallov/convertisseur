@@ -264,6 +264,46 @@ def publish_job(job_id):
         update(job_id, status='review', upload='failed', message='Dépôt impossible. Vos résultats restent disponibles.', error_code='upload_failed', action='Réessayez le dépôt ou téléchargez les fichiers.')
 
 
+ACTIVE = ('queued', 'running', 'publishing')
+
+
+def retry_job(job_id):
+    """Run the stored PDF through the engine again after a failure or interruption."""
+    command = engine_command()
+    if not command:
+        return 503, {'error': 'Audiveris est indisponible. Contactez l’administrateur.'}
+    folder = DATA / job_id
+    with LOCK:
+        job = JOBS.get(job_id)
+        if not job:
+            return 404, {'error': 'Conversion introuvable.'}
+        if job.get('status') != 'error':
+            return 409, {'error': 'Seule une conversion échouée ou interrompue peut être relancée.'}
+        if not (folder / 'source.pdf').is_file():
+            return 410, {'error': 'Le PDF d’origine n’est plus disponible. Importez-le de nouveau.'}
+        if sum(j['status'] in ('queued', 'running') for j in JOBS.values()) >= 4:
+            return 429, {'error': 'La file est pleine. Attendez la fin d’une conversion.'}
+        job.update(status='queued', message='En attente du moteur OMR…', files=[], action='', error_code='', upload='', reader_links=[])
+    shutil.rmtree(folder / 'output', ignore_errors=True)
+    for stale in [*folder.glob('partition-*'), folder / 'result.json']:
+        stale.unlink(missing_ok=True)
+    POOL.submit(convert, job_id, command)
+    return 202, {'id': job_id, 'status': 'queued'}
+
+
+def delete_job(job_id):
+    """Remove a finished conversion and every file stored for it."""
+    with LOCK:
+        job = JOBS.get(job_id)
+        if not job:
+            return 404, {'error': 'Conversion introuvable.'}
+        if job.get('status') in ACTIVE:
+            return 409, {'error': 'Attendez la fin du traitement avant de supprimer cette conversion.'}
+        del JOBS[job_id]
+    shutil.rmtree(DATA / job_id, ignore_errors=True)
+    return 200, {'deleted': job_id}
+
+
 class Handler(BaseHTTPRequestHandler):
     def json_response(self, code, value):
         body = json.dumps(value, ensure_ascii=False).encode()
@@ -357,6 +397,11 @@ class Handler(BaseHTTPRequestHandler):
                 job.update(status='publishing', message='Dépôt dans Paheko en cours…')
             POOL.submit(publish_job, publish_match[1])
             return self.json_response(200, {'status':'publishing'})
+        manage_match = re.fullmatch(r'/api/jobs/([a-f0-9]{32})/(retry|delete)', urlparse(self.path).path)
+        if manage_match:
+            job_id, operation = manage_match.groups()
+            code, value = retry_job(job_id) if operation == 'retry' else delete_job(job_id)
+            return self.json_response(code, value)
         if self.path != '/api/jobs':
             return self.json_response(404, {'error': 'Page introuvable.'})
         command = engine_command()
@@ -397,7 +442,7 @@ if __name__ == '__main__':
     for folder in DATA.iterdir():
         if folder.is_dir() and re.fullmatch('[a-f0-9]{32}', folder.name):
             files = sorted(p.name for p in folder.iterdir() if p.suffix in ('.musicxml', '.mxl'))
-            JOBS[folder.name] = {'name': stored_name(folder), 'status': 'done' if files else 'error', 'message': 'Résultats restaurés.' if files else 'Conversion interrompue. Importez de nouveau le PDF.', 'files': files, **job_details(folder)}
+            JOBS[folder.name] = {'name': stored_name(folder), 'status': 'done' if files else 'error', 'message': 'Résultats restaurés.' if files else 'Conversion interrompue. Cliquez sur « Relancer la conversion ».', 'files': files, **job_details(folder)}
     port = int(os.environ.get('PORT', '8765'))
     print(f'Application disponible sur http://127.0.0.1:{port}', flush=True)
     ThreadingHTTPServer(('127.0.0.1', port), Handler).serve_forever()

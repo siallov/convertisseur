@@ -137,6 +137,24 @@ class SharedTests(unittest.TestCase):
             with self.request(path,'alice',data=b'') as r:self.assertEqual(json.load(r)['status'],'publishing')
             self.assertEqual(submit.call_count,1)
 
+    def test_only_owner_can_retry_or_delete(self):
+        folder = app.DATA / self.job
+        (folder / 'source.pdf').write_bytes(b'%PDF-1.4\n')
+        app.JOBS[self.job].update(status='error')
+        with patch.object(app, 'engine_command', return_value=['audiveris']), patch.object(app.POOL, 'submit') as submit:
+            for operation in ('retry', 'delete'):
+                with self.assertRaises(HTTPError) as e:self.request(f'/api/jobs/{self.job}/{operation}','bob',data=b'')
+                self.assertEqual(e.exception.code,404);e.exception.close()
+                with self.assertRaises(HTTPError) as e:self.request(f'/api/jobs/{self.job}/{operation}','alice',data=b'',headers={'Origin':'https://evil.example'})
+                self.assertEqual(e.exception.code,403);e.exception.close()
+            submit.assert_not_called()
+            self.assertTrue(folder.exists())
+            with self.request(f'/api/jobs/{self.job}/retry','alice',data=b'') as r:self.assertEqual(json.load(r)['status'],'queued')
+            self.assertEqual(app.JOBS[self.job]['owner'],'alice')
+            app.JOBS[self.job]['status']='error'
+            with self.request(f'/api/jobs/{self.job}/delete','alice',data=b'') as r:self.assertEqual(json.load(r)['deleted'],self.job)
+        self.assertFalse(folder.exists())
+
     def test_settings_are_admin_only_and_never_return_password(self):
         config=self.root/'administrators.json';config.write_text('["alice"]')
         with patch.object(shared,'ADMINS',config):

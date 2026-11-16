@@ -58,6 +58,43 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual(len(app.JOBS[job_id]['files']), 2)
         self.assertIn(b'score-partwise', (folder / 'partition-1.musicxml').read_bytes())
 
+    def test_retry_requeues_failed_job_and_clears_old_results(self):
+        job_id = 'b' * 32
+        folder = self.data / job_id
+        (folder / 'output').mkdir(parents=True)
+        (folder / 'source.pdf').write_bytes(b'%PDF-1.4\n')
+        (folder / 'partition-1.mxl').write_bytes(b'old')
+        (folder / 'result.json').write_text('{}')
+        app.JOBS[job_id] = {'status': 'error', 'files': ['partition-1.mxl'], 'action': 'x', 'error_code': 'recognition'}
+        with patch.object(app, 'engine_command', return_value=['audiveris']), patch.object(app.POOL, 'submit') as submit:
+            self.assertEqual(app.retry_job(job_id)[0], 202)
+            submit.assert_called_once_with(app.convert, job_id, ['audiveris'])
+            self.assertEqual(app.retry_job(job_id)[0], 409)  # already queued
+            self.assertEqual(app.retry_job('c' * 32)[0], 404)
+        self.assertEqual(app.JOBS[job_id]['status'], 'queued')
+        self.assertEqual(app.JOBS[job_id]['files'], [])
+        self.assertFalse((folder / 'partition-1.mxl').exists() or (folder / 'result.json').exists() or (folder / 'output').exists())
+        self.assertTrue((folder / 'source.pdf').exists())
+        (folder / 'source.pdf').unlink()
+        app.JOBS[job_id]['status'] = 'error'
+        with patch.object(app, 'engine_command', return_value=['audiveris']), patch.object(app.POOL, 'submit') as submit:
+            self.assertEqual(app.retry_job(job_id)[0], 410)
+            submit.assert_not_called()
+
+    def test_delete_removes_finished_job_but_not_active_one(self):
+        job_id = 'd' * 32
+        folder = self.data / job_id
+        folder.mkdir()
+        (folder / 'source.pdf').write_bytes(b'%PDF-1.4\n')
+        app.JOBS[job_id] = {'status': 'running', 'files': []}
+        self.assertEqual(app.delete_job(job_id)[0], 409)
+        self.assertTrue(folder.exists())
+        app.JOBS[job_id]['status'] = 'done'
+        self.assertEqual(app.delete_job(job_id)[0], 200)
+        self.assertNotIn(job_id, app.JOBS)
+        self.assertFalse(folder.exists())
+        self.assertEqual(app.delete_job(job_id)[0], 404)
+
     def test_failure_is_reported(self):
         job_id = 'b' * 32
         (self.data / job_id).mkdir()

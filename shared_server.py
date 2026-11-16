@@ -382,6 +382,14 @@ class SharedHandler(app.Handler):
                 job.update(status='publishing', message='Dépôt dans Paheko en cours…')
             app.POOL.submit(app.publish_job, match[1])
             return self.json_response(200, {'status':'publishing'})
+        match = app.re.fullmatch(r'/api/jobs/([a-f0-9]{32})/(retry|delete)', urlparse(self.path).path)
+        if match:
+            with app.LOCK:
+                owned = app.JOBS.get(match[1], {}).get('owner') == self.user
+            if not owned:
+                return self.json_response(404, {'error':'Conversion introuvable.'})
+            code, value = app.retry_job(match[1]) if match[2] == 'retry' else app.delete_job(match[1])
+            return self.json_response(code, value)
         cleanup()
         if sum(p.stat().st_size for p in app.DATA.rglob('*') if p.is_file()) > 1024**3:
             return self.json_response(507, {'error': 'Stockage temporaire plein. Réessayez après le nettoyage.'})
