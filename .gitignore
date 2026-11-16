@@ -3,3 +3,4 @@ data/
 .tools/
 __pycache__/
 *.pyc
+.ai-code-tracker.json

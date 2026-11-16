@@ -81,6 +81,27 @@ class SyncTests(unittest.TestCase):
         self.assertTrue(seen['auth'].startswith('Basic '))
         self.assertIn('id_category+IN+%281%29', seen['body'])
 
+    def test_fetch_members_surfaces_paheko_api_json_error_on_4xx(self):
+        class ErrorApi(BaseHTTPRequestHandler):
+            def log_message(self, format: str, *args: object) -> None:
+                pass
+
+            def do_POST(self):
+                data = json.dumps({'error': 'Champ inconnu dans la requête SQL'}).encode()
+                self.send_response(400)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        server = HTTPServer(('127.0.0.1', 0), ErrorApi)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        config = {'url': f'http://127.0.0.1:{server.server_port}', 'api_id': 'sync', 'api_secret': 's', 'categories': [1]}
+        with self.assertRaisesRegex(ValueError, 'HTTP 400 : Champ inconnu dans la requête SQL'):
+            sm.fetch_members(config)
+
     def test_mail_sent_skips_pending_file(self):
         sm.SMTP.write_text(json.dumps({'host': 'h', 'port': 465, 'user': 'u', 'password': 'p', 'from': 'u@x.fr'}))
         with patch.object(sm.smtplib, 'SMTP_SSL') as smtp:

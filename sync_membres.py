@@ -59,8 +59,20 @@ def fetch_members(config):
     sql = f'SELECT id, {field} AS name, email FROM users WHERE id_category IN ({ids}) ORDER BY id'
     token = base64.b64encode(f"{config['api_id']}:{config['api_secret']}".encode()).decode()
     request = Request(config['url'].rstrip('/') + '/api/sql', data=urlencode({'sql': sql}).encode(), headers={'Authorization': 'Basic ' + token})
-    with urlopen(request, timeout=60) as response:
-        rows = json.loads(response.read())['results']
+    try:
+        with urlopen(request, timeout=60) as response:
+            payload = json.loads(response.read())
+    except HTTPError as error:
+        try:
+            detail = json.loads(error.read().decode('utf-8', 'replace')).get('error')
+        except ValueError:
+            detail = None
+        if detail:
+            raise ValueError(f'HTTP {error.code} : {detail}') from None
+        raise
+    if isinstance(payload, dict) and payload.get('error'):
+        raise ValueError(str(payload['error']))
+    rows = payload['results']
     return [(int(row['id']), str(row['name'] or ''), str(row.get('email') or '').strip()) for row in rows]
 
 
