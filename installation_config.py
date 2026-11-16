@@ -10,7 +10,7 @@ import paheko_upload
 
 def raw():
     try:
-        value = json.loads(paheko_upload.CONFIG.read_text())
+        value = json.loads(paheko_upload.CONFIG.read_text(encoding='utf-8'))
         return value if isinstance(value, dict) else {}
     except (OSError, ValueError):
         return {}
@@ -74,7 +74,7 @@ def save(values):
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd, temp = tempfile.mkstemp(dir=path.parent, prefix='.installation-')
     try:
-        with os.fdopen(fd, 'w') as f:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False)
         os.chmod(temp, 0o600)
         os.replace(temp, path)

@@ -4,9 +4,9 @@ import json
 import re
 import secrets
 import time
-from pathlib import Path
+import chemins
 
-FILE = Path(__file__).resolve().parent / 'private' / 'activations.json'
+FILE = chemins.PRIVATE / 'activations.json'
 VALIDITY = 48 * 3600
 TOKEN = re.compile(r'[A-Za-z0-9_-]{20,80}')
 
@@ -17,7 +17,7 @@ def _digest(token):
 
 def _load():
     try:
-        data = json.loads(FILE.read_text())
+        data = json.loads(FILE.read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return {}
     now = time.time()

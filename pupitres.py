@@ -255,16 +255,16 @@ def source(folder, filename):
 
 def describe(folder, filename):
     tracks=discover(source(folder,filename))
-    try:stored=json.loads((folder/'pupitres.json').read_text()).get(filename,{})
+    try:stored=json.loads((folder/'pupitres.json').read_text(encoding='utf-8')).get(filename,{})
     except (OSError,ValueError):stored={}
     for track in tracks:track['label']=stored.get(track['id'],track['label'])
-    try:corrections=json.loads((folder/'affectations.json').read_text()).get(filename,{})
+    try:corrections=json.loads((folder/'affectations.json').read_text(encoding='utf-8')).get(filename,{})
     except (OSError,ValueError):corrections={}
     return {'file':filename,'tracks':tracks,'choices':LABELS,'notes':note_catalog(source(folder,filename)),'corrections':corrections}
 
 
 def save(folder, filename, labels, corrections=None):
-    try:assignments=json.loads((folder/'affectations.json').read_text())
+    try:assignments=json.loads((folder/'affectations.json').read_text(encoding='utf-8'))
     except (OSError,ValueError):assignments={}
     if corrections is None:corrections=assignments.get(filename,{})
     original=source(folder,filename);xml=separate(original,labels,corrections)
@@ -279,7 +279,7 @@ def save(folder, filename, labels, corrections=None):
             if member not in archive.namelist():raise ValueError('Archive MXL invalide.')
             for info in archive.infolist():updated.writestr(info,xml if info.filename==member else archive.read(info.filename))
         changes[mxl]=buffer.getvalue()
-    try:settings=json.loads((folder/'pupitres.json').read_text())
+    try:settings=json.loads((folder/'pupitres.json').read_text(encoding='utf-8'))
     except (OSError,ValueError):settings={}
     settings[filename]={key:value.strip() for key,value in labels.items()}
     changes[folder/'pupitres.json']=json.dumps(settings,ensure_ascii=False).encode()

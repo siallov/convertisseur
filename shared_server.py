@@ -19,10 +19,11 @@ from urllib.parse import parse_qs, urlparse
 
 import activation
 import app
+import chemins
 import installation_config
 import pupitres
 
-STATE = app.ROOT / 'private'
+STATE = chemins.PRIVATE
 ACCOUNTS = STATE / 'accounts.json'
 ADMINS = STATE / 'administrators.json'
 RETENTION = 24 * 3600

@@ -11,7 +11,9 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse
 from urllib.request import Request, urlopen
 
-CONFIG = Path(__file__).resolve().parent / 'private' / 'paheko.json'
+import chemins
+
+CONFIG = chemins.PRIVATE / 'paheko.json'
 
 class PublishResult(TypedDict):
     state: str

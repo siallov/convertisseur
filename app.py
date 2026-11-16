@@ -18,13 +18,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
+import chemins
 import installation_config
 import paheko_upload
 import paroles
 import pupitres
 
-ROOT = Path(__file__).resolve().parent
-DATA = ROOT / 'data'
+ROOT = chemins.ROOT
+DATA = chemins.DATA
 MAX_BYTES = 80 * 1024 * 1024
 JOBS = {}
 LOCK = threading.Lock()
@@ -32,18 +33,34 @@ POOL = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 LOGGER = logging.getLogger(__name__)
 
 
+def split_command(value):
+    """Split AUDIVERIS_CMD; on Windows, backslashes are path separators, not escapes."""
+    if not chemins.WINDOWS:
+        return shlex.split(value)
+    return [part[1:-1] if len(part) > 1 and part[0] == part[-1] == '"' else part
+            for part in shlex.split(value, posix=False)]
+
+
+def engine_candidates():
+    """Usual install locations of Audiveris, when it is not on the PATH."""
+    if chemins.WINDOWS:
+        return [folder / 'Audiveris' / 'Audiveris.exe' for folder in chemins.program_files()]
+    return [Path('/opt/audiveris/bin/Audiveris'), Path('/opt/audiveris/bin/audiveris'),
+            Path('/Applications/Audiveris.app/Contents/MacOS/Audiveris')]
+
+
 def engine_command():
     value = os.environ.get('AUDIVERIS_CMD')
     if value:
-        command = shlex.split(value)
-        if command and shutil.which(command[0]):
+        command = split_command(value)
+        if command and (shutil.which(command[0]) or Path(command[0]).is_file()):
             return command
         return None
     executable = shutil.which('audiveris') or shutil.which('Audiveris')
     if not executable:
-        for candidate in ('/opt/audiveris/bin/Audiveris', '/opt/audiveris/bin/audiveris'):
-            if os.access(candidate, os.X_OK):
-                executable = candidate
+        for candidate in engine_candidates():
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                executable = str(candidate)
                 break
     return [executable] if executable else None
 
@@ -82,7 +99,7 @@ def job_details(folder):
     result = {}
     for name in ('score.json', 'result.json'):
         try:
-            result.update(json.loads((folder / name).read_text()))
+            result.update(json.loads((folder / name).read_text(encoding='utf-8')))
         except (OSError, ValueError):
             pass
     return result
@@ -124,7 +141,7 @@ def update(job_id, **values):
         JOBS[job_id].update(values)
         if values.get("status") in ("done", "error", "review", "publishing"):
             try:
-                (DATA / job_id / "result.json").write_text(json.dumps(values, ensure_ascii=False))
+                (DATA / job_id / "result.json").write_text(json.dumps(values, ensure_ascii=False), encoding='utf-8')
             except OSError:
                 pass
 
@@ -137,15 +154,27 @@ def ocr_language_options():
     return ['-constant', f'org.audiveris.omr.text.Language.defaultSpecification={languages}']
 
 
-def pdf_resolution_options(source):
-    """Keep rendered pages below Audiveris's 20 million pixel limit."""
+def page_sizes(source):
+    """Page sizes in points: PyMuPDF when installed (also on Windows), else poppler's pdfinfo."""
+    if paroles.pymupdf is not None:
+        try:
+            with paroles.pymupdf.open(source) as doc:
+                return [(page.rect.width, page.rect.height) for page in doc]
+        except Exception:  # noqa: BLE001 -- unreadable here: let pdfinfo or Audiveris report it
+            pass
     if not shutil.which('pdfinfo'):
         return []
     result = subprocess.run(['pdfinfo', '-f', '1', '-l', '999999', str(source)],
                             check=False, capture_output=True, text=True, timeout=30)
     if result.returncode:
         return []
-    sizes = re.findall(r'(?:Page\s+\d+\s+size:|Page size:)\s*([\d.]+)\s+x\s+([\d.]+)\s+pts', result.stdout)
+    found = re.findall(r'(?:Page\s+\d+\s+size:|Page size:)\s*([\d.]+)\s+x\s+([\d.]+)\s+pts', result.stdout)
+    return [(float(w), float(h)) for w, h in found]
+
+
+def pdf_resolution_options(source):
+    """Keep rendered pages below Audiveris's 20 million pixel limit."""
+    sizes = page_sizes(source)
     if not sizes:
         return []
     area = max(float(w) * float(h) for w, h in sizes)
@@ -225,7 +254,7 @@ def run_engine(command, folder, options, deadline, attempt):
     environment['JAVA_TOOL_OPTIONS'] = (environment.get('JAVA_TOOL_OPTIONS', '') + ' -Djava.awt.headless=true').strip()
     arguments = command + ['-batch', '-transcribe', '-export'] + options
     arguments += ['-output', str(folder / 'output'), '--', str(folder / 'source.pdf')]
-    with (folder / 'conversion.log').open('a' if attempt > 1 else 'w') as stream:
+    with (folder / 'conversion.log').open('a' if attempt > 1 else 'w', encoding='utf-8') as stream:
         if attempt > 1:
             without = ' sans reconnaissance du texte' if WITHOUT_TEXT[1] in options else ''
             stream.write(f'\n{ATTEMPT_MARK} ({attempt}/{MAX_ATTEMPTS}){without} ===\n')
@@ -330,8 +359,8 @@ def publish_job(job_id):
         if job.get('owner'):
             classification['requested_by'] = job['owner']
         if (folder / 'pupitres.json').is_file():
-            classification['pupitres'] = json.loads((folder / 'pupitres.json').read_text())
-        metadata.write_text(json.dumps(classification, ensure_ascii=False))
+            classification['pupitres'] = json.loads((folder / 'pupitres.json').read_text(encoding='utf-8'))
+        metadata.write_text(json.dumps(classification, ensure_ascii=False), encoding='utf-8')
         payload.append((stem + '.partition.json', metadata))
         try:
             published = paheko_upload.publish(payload, detailed=True)
@@ -487,7 +516,7 @@ def resume_interrupted():
             continue
         counter = DATA / job_id / 'reprises'
         try:
-            count = int(counter.read_text())
+            count = int(counter.read_text(encoding='utf-8'))
         except (OSError, ValueError):
             count = 0
         if count >= MAX_RESUMES:
@@ -754,14 +783,14 @@ class Handler(BaseHTTPRequestHandler):
         name = self.headers.get('X-Filename', 'partition.pdf')
         with LOCK:
             JOBS[job_id] = {'name': unquote(name)[:200], 'status': 'queued', 'message': 'En attente du moteur OMR…', 'files': [], **details}
-        (folder / 'score.json').write_text(json.dumps(details, ensure_ascii=False))
+        (folder / 'score.json').write_text(json.dumps(details, ensure_ascii=False), encoding='utf-8')
         (folder / 'name.txt').write_text(JOBS[job_id]['name'], encoding='utf-8')
         POOL.submit(convert, job_id, command)
         return self.json_response(202, {'id': job_id})
 
 
 if __name__ == '__main__':
-    DATA.mkdir(exist_ok=True)
+    DATA.mkdir(parents=True, exist_ok=True)
     # Restore results after restarting the app, then resume what the restart interrupted.
     for folder in sorted(DATA.iterdir(), key=lambda f: f.stat().st_mtime):
         if folder.is_dir() and re.fullmatch('[a-f0-9]{32}', folder.name):

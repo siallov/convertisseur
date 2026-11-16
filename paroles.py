@@ -7,10 +7,26 @@ tab reports that it is unavailable and the rest of the application still works.
 """
 import concurrent.futures
 import json
+import os
 import shutil
 import threading
 import time
 import uuid
+
+import chemins
+
+
+def find_tesseract():
+    """The Windows installer does not add Tesseract to the PATH: add its usual folder."""
+    if not chemins.WINDOWS or shutil.which('tesseract'):
+        return
+    for folder in chemins.program_files():
+        if (folder / 'Tesseract-OCR' / 'tesseract.exe').is_file():
+            os.environ['PATH'] = str(folder / 'Tesseract-OCR') + os.pathsep + os.environ.get('PATH', '')
+            return
+
+
+find_tesseract()
 
 try:
     import pymupdf

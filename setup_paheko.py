@@ -18,7 +18,7 @@ def main():
     old = settings.administrative()
     if not settings.raw():
         try:
-            hint = json.loads((settings.paheko_upload.CONFIG.parent / 'installation-a-completer.json').read_text())
+            hint = json.loads((settings.paheko_upload.CONFIG.parent / 'installation-a-completer.json').read_text(encoding='utf-8'))
             for key in ['association','converter_url','webdav_url','folder','module_path']:
                 if key in hint:old[key]=hint[key]
         except (OSError,ValueError):
