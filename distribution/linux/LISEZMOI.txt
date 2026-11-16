@@ -1,0 +1,39 @@
+ATELIER PARTITIONS — installation sous Linux
+==============================================
+
+Ce que fait l'application
+  • Convertir une partition PDF en MusicXML (avec Audiveris), la vérifier et l'écouter.
+  • Extraire les paroles d'une partition (texte) et obtenir le PDF sans les paroles.
+  • Déposer les partitions dans Paheko (facultatif, quand internet est disponible).
+Tout le traitement a lieu sur le PC : l'application fonctionne sans connexion.
+
+Systèmes pris en charge
+  Ubuntu 22.04 ou plus récent, Debian 12 ou plus récent, et leurs dérivés (Linux Mint…),
+  sur un PC 64 bits (x86_64).
+
+Installer
+  1. Décompressez l'archive, par exemple dans le dossier Téléchargements.
+  2. Ouvrez un terminal dans le dossier « atelier-partitions » et lancez :
+         ./installer.sh
+  3. Saisissez votre mot de passe si l'installateur le demande : il installe alors
+     Python, Tesseract (lecture du texte) et Audiveris (lecture des notes).
+  Internet est nécessaire pendant l'installation (environ 300 Mo à télécharger).
+
+Utiliser
+  Ouvrez « Atelier partitions » dans le menu des applications, ou tapez : atelier-partitions
+  L'application s'ouvre dans votre navigateur, à l'adresse http://127.0.0.1:8765
+
+Déposer dans Paheko (facultatif)
+  Dans un terminal :
+      ~/.local/share/atelier-partitions/programme/.venv/bin/python ~/.local/share/atelier-partitions/programme/setup_paheko.py
+
+Où sont mes fichiers ?
+  Conversions et réglages : ~/.local/share/atelier-partitions
+  Le programme            : ~/.local/share/atelier-partitions/programme
+
+Mettre à jour
+  Relancez ./installer.sh depuis la nouvelle archive : vos conversions et réglages sont conservés.
+
+Désinstaller
+  ~/.local/share/atelier-partitions/programme/desinstaller.sh
+  (vos conversions sont conservées, sauf si vous demandez leur suppression)

@@ -557,6 +557,7 @@ ASSETS = {
     '/vendor/choir.json': ('vendor/choir_aahs.json', 'application/json'),
     '/vendor/osmd.js': ('vendor/opensheetmusicdisplay.min.js', 'text/javascript; charset=utf-8'),
     '/paroles': ('paroles.html', 'text/html; charset=utf-8'),
+    '/icone.svg': ('icone.svg', 'image/svg+xml'),
     '/paroles.js': ('paroles.js', 'text/javascript; charset=utf-8'),
 }
 PAROLES_PATH = re.compile(r'/api/paroles/([a-f0-9]{32})(?:/(page|apercu)/(\d{1,4})|/(calcul|pdf))?')

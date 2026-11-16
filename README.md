@@ -1,8 +1,20 @@
 # Partition — PDF → MusicXML
 
-Application locale en français, sans dépendance Python externe. Import PDF par glisser-déposer, aperçu, file de conversion, journal et téléchargement `.musicxml` et `.mxl`. Les documents restent sur votre ordinateur, dans `data/` (supprimez ce dossier lorsque l’application est arrêtée pour effacer l’historique). Les polices Google sont optionnelles et remplacées automatiquement par une police système sans connexion.
+Application locale en français. Import PDF par glisser-déposer, aperçu, file de conversion, journal et téléchargement `.musicxml` et `.mxl`. Un onglet « Extraire les paroles » récupère le texte d’une partition et produit le PDF sans paroles. Les documents restent sur votre ordinateur. Les polices Google sont optionnelles et remplacées automatiquement par une police système sans connexion.
 
-## Démarrage
+La conversion n’utilise que la bibliothèque standard de Python. L’onglet « Paroles » a besoin de `requirements-paroles.txt` (PyMuPDF, numpy, SciPy, Pillow) ; sans ces bibliothèques, il l’indique et le reste fonctionne.
+
+Les données sont rangées dans `data/` et `private/` à côté du programme quand ces dossiers existent (installations existantes), sinon dans le profil : `~/.local/share/atelier-partitions` (Linux) ou `%LOCALAPPDATA%\AtelierPartitions` (Windows). `PARTITIONS_HOME` choisit un autre dossier.
+
+## Installer sur un autre PC (« Atelier partitions »)
+
+```bash
+python3 distribution/build.py
+```
+
+produit `dist/atelier-partitions-<version>-linux.tar.gz`. Sur le PC de destination (Ubuntu 22.04+, Debian 12+ ou dérivé, 64 bits), décompresser l’archive puis lancer `./installer.sh` : il installe au besoin Python, Tesseract et Audiveris (version fixée, empreinte vérifiée), crée l’environnement Python, la commande `atelier-partitions` et l’icône du menu. Détails pour l’utilisateur dans `distribution/linux/LISEZMOI.txt`. Le lanceur (`lanceur.py`) démarre l’application si besoin puis ouvre le navigateur ; `--arreter` l’arrête.
+
+## Démarrage depuis les sources
 
 1. Installez Python 3.10 ou plus récent.
 2. Installez **Audiveris** depuis les versions officielles : https://github.com/Audiveris/audiveris/releases. Les installateurs récents incluent Java. Suivez les instructions de la version adaptée à votre système.
