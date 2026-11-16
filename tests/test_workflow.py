@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -31,7 +32,7 @@ class WorkflowTests(unittest.TestCase):
         temporary=tempfile.TemporaryDirectory();self.addCleanup(temporary.cleanup)
         root=Path(temporary.name);job='c'*32;folder=root/job;folder.mkdir()
         (folder/'source.pdf').write_bytes(b'%PDF-1.4\n')
-        data={'name':'scan.pdf','title':'Ave verum','composer':'Mozart','part':'Alto','song_id':'12','status':'queued','files':[]}
+        data={'name':'scan.pdf','title':'Ave verum','composer':'Mozart','part':'Alto','song_id':'12','owner':'alice','status':'queued','files':[]}
         def engine(*args,**kwargs):
             output=folder/'output';output.mkdir()
             with zipfile.ZipFile(output/'score.mxl','w') as z:
@@ -50,6 +51,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(xml.findtext('identification/creator'),'Mozart')
             self.assertIn('Ave verum — Mozart — Alto.pdf',[n for n,p in publish.call_args.args[0]])
             self.assertEqual(app.job_details(folder)['upload'],publication['state'])
+            self.assertEqual(json.loads((folder/'classification.json').read_text())['requested_by'],'alice')
         app.JOBS.pop(job,None)
         return result
 

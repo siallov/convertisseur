@@ -78,11 +78,26 @@ def cleanup():
             del app.JOBS[key]
 
 
+# Invisible to people (and skipped by keyboard and screen readers); robots that fill every field reveal themselves.
+HONEYPOT = ('<div aria-hidden="true" style="position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden">'
+            '<label>Site web<input name="website" tabindex="-1" autocomplete="off"></label></div>')
+
+
+def send_reset(identifier):
+    import sync_membres  # imported late: sync_membres itself imports this module
+    try:
+        sync_membres.reset_password(identifier)
+    except Exception:
+        LOGGER.warning('Password reset could not be processed')
+
+
 class SharedHandler(app.Handler):
     sessions: ClassVar[dict[str, tuple[str, float]]] = {}
     sessions_lock = threading.Lock()
     attempts: ClassVar[dict[str, tuple[float, int]]] = {}
     attempts_lock = threading.Lock()
+    # One reset e-mail per identifier every 15 minutes, whatever the address asking.
+    reset_requests: ClassVar[dict[str, float]] = {}
 
     def setup(self):
         super().setup()
@@ -92,6 +107,7 @@ class SharedHandler(app.Handler):
         self.send_header('Cache-Control', 'no-store')
         self.send_header('Referrer-Policy', 'same-origin')
         self.send_header('X-Frame-Options', 'DENY')
+        self.send_header('X-Robots-Tag', 'noindex, nofollow, noarchive')
         allowed_origin = installation_config.public()['paheko_origin']
         if allowed_origin and getattr(self, 'send_header_origin', '') == allowed_origin:
             self.send_header('Access-Control-Allow-Origin', allowed_origin)
@@ -115,31 +131,66 @@ class SharedHandler(app.Handler):
         origin = self.headers.get('Origin')
         if origin and not self.origin_allowed(origin):
             return self.json_response(403, {'error': 'Origine refusée.'})
+        # Password managers sometimes submit the form natively instead of through the page script.
+        native = self.headers.get('Content-Type', '').startswith('application/x-www-form-urlencoded')
         try:
             length = int(self.headers.get('Content-Length', 0))
             if not 0 < length < 4096:
                 raise ValueError()
-            fields = json.loads(self.rfile.read(length))
+            raw = self.rfile.read(length)
+            fields = {k: v[0] for k, v in parse_qs(raw.decode('utf-8', 'replace'), keep_blank_values=True).items()} if native else json.loads(raw)
             name, password = fields['username'], fields['password']
             if not isinstance(name, str) or not isinstance(password, str) or ':' in name:
                 raise ValueError()
+            if fields.get('website'):
+                blocked, identity, now = self.throttled()
+                self.count_failure(identity, now)
+                return self.native_redirect('/?erreur=1') if native else self.json_response(401, {'error': 'Identifiant ou mot de passe incorrect, ou session expirée.'})
         except (ValueError, KeyError, TypeError):
-            return self.json_response(400, {'error': 'Saisie invalide.'})
+            return self.native_redirect('/?erreur=1') if native else self.json_response(400, {'error': 'Saisie invalide.'})
         if 'Authorization' in self.headers:
             del self.headers['Authorization']
         self.headers['Authorization'] = 'Basic ' + base64.b64encode((name + ':' + password).encode()).decode()
-        if not self.authenticate(use_session=False):
+        if native:
+            if not self.check_password(name, password):
+                return self.native_redirect('/?erreur=1')
+            self.user = name
+        elif not self.authenticate(use_session=False):
             return
         token = secrets.token_urlsafe(32)
         with self.sessions_lock:
             type(self).sessions = {k:v for k,v in self.sessions.items() if v[1] > time.time()}
             self.sessions[token] = (self.user, time.time() + 12 * 3600)
+        cookie = '__Host-omr_session=' + token + '; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=43200'
+        if native:
+            return self.native_redirect('/', cookie)
         self.send_response(200)
-        self.send_header('Set-Cookie', '__Host-omr_session=' + token + '; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=43200')
+        self.send_header('Set-Cookie', cookie)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Content-Length', '11')
         self.end_headers()
         self.wfile.write(b'{"ok":true}')
+
+    def native_redirect(self, location, cookie=None):
+        self.send_response(303)
+        if cookie:
+            self.send_header('Set-Cookie', cookie)
+        self.send_header('Location', location)
+        self.send_header('Content-Length', '0')
+        self.end_headers()
+
+    def check_password(self, name, password):
+        """Same rules as authenticate(): rate limit per address, slow hash, constant-time comparison."""
+        blocked, identity, now = self.throttled()
+        if blocked:
+            return False
+        user = accounts().get(name)
+        if user and ':' not in name:
+            digest = hashlib.pbkdf2_hmac('sha256', password.encode(), bytes.fromhex(user['salt']), 600000).hex()
+            if hmac.compare_digest(digest, user['hash']):
+                return True
+        self.count_failure(identity, now)
+        return False
 
     def authenticate(self, use_session=True):
         if use_session:
@@ -222,7 +273,7 @@ class SharedHandler(app.Handler):
         blocked, identity, now = self.throttled()
         if blocked:
             return self.activation_page('', 'Trop de tentatives. Réessayez dans cinq minutes.', 429)
-        invalid = 'Ce lien est invalide ou expiré. Demandez-en un nouveau à l’administrateur.'
+        invalid = 'Ce lien est invalide ou expiré. <a href="/mot-de-passe-oublie">Demandez un nouveau lien</a> ou contactez l’administrateur.'
         if not post:
             token = parse_qs(urlparse(self.path).query).get('token', [''])[0]
             if activation.lookup(token):
@@ -249,6 +300,54 @@ class SharedHandler(app.Handler):
         activation.burn(token)
         return self.activation_page('', f'Compte activé. Votre identifiant est : <b>{user}</b>. Vous pouvez maintenant ouvrir le convertisseur.')
 
+    def reset_page(self, message='', code=200, form=True):
+        form_html = ('<form method="post" action="/mot-de-passe-oublie">'
+                     '<p><label>Votre identifiant ou votre adresse e-mail<br><input name="identifier" required maxlength="200" autocomplete="username" autofocus></label></p>'
+                     f'{HONEYPOT}<p><button>Recevoir un lien</button></p></form>') if form else ''
+        body = ('<!doctype html><html lang="fr"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+                '<title>Mot de passe oublié</title><body style="font-family:sans-serif;max-width:30em;margin:2em auto;padding:0 1em">'
+                '<h1>Mot de passe oublié</h1>'
+                f'<p>{message or "Indiquez votre identifiant du convertisseur ou l’adresse e-mail de votre fiche Paheko. Vous recevrez un lien pour choisir un nouveau mot de passe."}</p>'
+                f'{form_html}<p><a href="/">← Retour à la connexion</a></p></body></html>').encode()
+        self.send_response(code)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def handle_reset(self, post):
+        if not post:
+            return self.reset_page()
+        blocked, identity, now = self.throttled()
+        if blocked:
+            return self.reset_page('Trop de demandes. Réessayez dans cinq minutes.', 429)
+        origin = self.headers.get('Origin')
+        if origin and not self.origin_allowed(origin):
+            return self.reset_page('Origine refusée.', 403)
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+        except ValueError:
+            length = 0
+        if not 0 < length < 4096:
+            return self.reset_page('Requête invalide.', 400)
+        fields = parse_qs(self.rfile.read(length).decode('utf-8', 'replace'))
+        identifier = fields.get('identifier', [''])[0].strip().lower()[:200]
+        if fields.get('website', [''])[0]:
+            identifier = ''  # robot: same answer, nothing sent
+        # Every request counts towards the per-address limit, so nobody can flood mailboxes.
+        self.count_failure(identity, now)
+        with self.attempts_lock:
+            recent = time.monotonic() - self.reset_requests.get(identifier, -1e9) < 900
+            if identifier and not recent:
+                self.reset_requests[identifier] = time.monotonic()
+        if identifier and not recent:
+            # Sent in the background: the answer and its timing never reveal whether the account exists.
+            threading.Thread(target=send_reset, args=(identifier,), daemon=True).start()
+        return self.reset_page('Si ce compte existe et qu’une adresse e-mail lui est associée, un lien vient d’être envoyé. '
+                               'Il est valable 48 heures. Pensez à regarder dans les courriers indésirables. '
+                               'Sans message, contactez l’administrateur de la chorale.', form=False)
+
     def is_admin(self):
         try:
             return self.user in json.loads(ADMINS.read_text())
@@ -264,13 +363,14 @@ class SharedHandler(app.Handler):
                 if file.is_file(): storage += file.stat().st_size
             except FileNotFoundError:
                 pass
-        fields = ('id', 'name', 'title', 'owner', 'status', 'message', 'created', 'error_code')
+        fields = ('id', 'name', 'title', 'part', 'owner', 'status', 'message', 'created', 'error_code')
         clean = lambda job: {k:job.get(k) for k in fields}
         recent = sorted(jobs, key=lambda j:j.get('created',0), reverse=True)
         return self.json_response(200, {
             'storage_bytes': storage, 'storage_limit': 1024**3, 'retention_hours':24,
             'counts': {state:sum(j.get('status')==state for j in jobs) for state in ('queued','running','review','publishing','done','error')},
             'queue':[clean(j) for j in recent if j.get('status') in ('queued','running','publishing')],
+            'recent':[clean(j) for j in recent][:50],
             'failures':[clean(j) for j in recent if j.get('status')=='error' or j.get('error_code')=='upload_failed'][:20]})
 
     def do_GET(self):
@@ -279,6 +379,15 @@ class SharedHandler(app.Handler):
             return self.json_response(200, {'available': bool(app.engine_command())})
         if urlparse(self.path).path == '/activation':
             return self.handle_activation(False)
+        if urlparse(self.path).path == '/mot-de-passe-oublie':
+            return self.handle_reset(False)
+        if urlparse(self.path).path == '/robots.txt':
+            body = b'User-agent: *\nDisallow: /\n'
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            return self.wfile.write(body)
         if not self.authenticate():
             return
         cleanup()
@@ -311,8 +420,8 @@ class SharedHandler(app.Handler):
             return self.file_response(app.ROOT / 'static' / 'shared-index.html', 'text/html; charset=utf-8')
         if path == '/api/jobs':
             with app.LOCK:
-                jobs = [dict(id=k, **v) for k,v in reversed(list(app.JOBS.items())) if v.get('owner') == self.user]
-            return self.json_response(200, jobs)
+                items = [(k, v) for k,v in reversed(list(app.JOBS.items())) if v.get('owner') == self.user]
+            return self.json_response(200, app.job_views(items))
         match = app.re.fullmatch(r'/api/jobs/([a-f0-9]{32})(?:/([a-z0-9.-]+))?', path)
         if match:
             with app.LOCK:
@@ -326,6 +435,8 @@ class SharedHandler(app.Handler):
             return self.login()
         if urlparse(self.path).path == '/activation':
             return self.handle_activation(True)
+        if urlparse(self.path).path == '/mot-de-passe-oublie':
+            return self.handle_reset(True)
         if not self.authenticate():
             return
         origin = self.headers.get('Origin')

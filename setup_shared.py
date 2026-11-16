@@ -60,6 +60,8 @@ class SetupHandler(BaseHTTPRequestHandler):
             digest=hashlib.pbkdf2_hmac('sha256',password.encode(),bytes.fromhex(salt),600000).hex()
             shared.ACCOUNTS.write_text(json.dumps({name:{'salt':salt,'hash':digest}}))
             shared.ACCOUNTS.chmod(0o600)
+            shared.ADMINS.write_text(json.dumps([name]))
+            shared.ADMINS.chmod(0o600)
             tokenfile=shared.STATE/'tunnel.token'
             tokenfile.write_text(token)
             tokenfile.chmod(0o600)

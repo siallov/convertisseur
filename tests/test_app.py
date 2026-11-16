@@ -95,6 +95,30 @@ class ApplicationTests(unittest.TestCase):
         self.assertFalse(folder.exists())
         self.assertEqual(app.delete_job(job_id)[0], 404)
 
+    def test_progress_is_estimated_from_audiveris_log(self):
+        self.assertEqual(app.log_progress('Picked up JAVA_TOOL_OPTIONS')['step'], 'Démarrage du moteur')
+        log = 'INFO  [source]   Book 560  | 4 sheets in /x/source.pdf\n'
+        log += 'INFO  [source#1]   StepMonitoring 98   | LOAD\nINFO  [source#1]   StepMonitoring 98   | PAGE\n'
+        log += 'INFO  [source#2]   StepMonitoring 98   | TEXTS\n'
+        progress = app.log_progress(log)
+        self.assertEqual((progress['sheet'], progress['sheets'], progress['step']), (2, 4, 'Lecture des paroles'))
+        self.assertEqual(progress['percent'], round(95 * (1 + 12 / 20) / 4))
+        self.assertEqual(app.log_progress(log + 'INFO  [source]  PartwiseBuilder 2707 | Exporting sheet(s): [#1]\n')['percent'], 97)
+
+    def test_job_list_reports_progress_and_queue_position(self):
+        running, queued = 'e' * 32, 'f' * 32
+        (self.data / running).mkdir()
+        (self.data / running / 'conversion.log').write_text('INFO [source] Book 1 | 1 sheet in x\nINFO  [source#1]  StepMonitoring 98   | TEXTS\n')
+        app.JOBS[running] = {'status': 'running', 'files': [], 'started': app.time.time() - 120}
+        app.JOBS[queued] = {'status': 'queued', 'files': []}
+        views = {v['id']: v for v in app.job_views(list(app.JOBS.items()))}
+        progress = views[running]['progress']
+        self.assertEqual(progress['percent'], 57)
+        self.assertGreaterEqual(progress['elapsed'], 120)
+        self.assertIn('remaining', progress)
+        self.assertEqual(views[queued]['ahead'], 1)
+        self.assertNotIn('progress', app.JOBS[running])
+
     def test_failure_is_reported(self):
         job_id = 'b' * 32
         (self.data / job_id).mkdir()

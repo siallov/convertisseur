@@ -119,6 +119,7 @@ class SharedTests(unittest.TestCase):
             with self.request('/api/admin','alice') as r:
                 dashboard=json.load(r)
                 self.assertEqual(dashboard['counts']['done'],1)
+                self.assertEqual([(j['id'],j['owner']) for j in dashboard['recent']],[(self.job,'alice')])
                 self.assertGreater(dashboard['storage_bytes'],0)
                 self.assertNotIn('hash',json.dumps(dashboard))
                 self.assertNotIn('salt',json.dumps(dashboard))
@@ -154,6 +155,64 @@ class SharedTests(unittest.TestCase):
             app.JOBS[self.job]['status']='error'
             with self.request(f'/api/jobs/{self.job}/delete','alice',data=b'') as r:self.assertEqual(json.load(r)['deleted'],self.job)
         self.assertFalse(folder.exists())
+
+    def test_forgot_password_is_public_generic_and_rate_limited(self):
+        with self.request('/mot-de-passe-oublie') as r:self.assertIn('identifiant ou votre adresse e-mail', r.read().decode())
+        with self.assertRaises(HTTPError) as e:self.request('/')
+        self.assertIn('/mot-de-passe-oublie', e.exception.read().decode());e.exception.close()
+        shared.SharedHandler.reset_requests.clear()
+        with patch.object(shared, 'send_reset') as send:
+            answers = []
+            for identifier in ('alice', 'inconnu', 'alice'):
+                with self.request('/mot-de-passe-oublie', data=f'identifier={identifier}'.encode()) as r:answers.append(r.read())
+            self.assertEqual(answers[0], answers[1])  # same answer whether the account exists or not
+            for _ in range(50):
+                if send.call_count >= 2:break
+                time.sleep(0.05)
+            self.assertEqual(sorted(c.args[0] for c in send.call_args_list), ['alice', 'inconnu'])  # second "alice" within 15 min is ignored
+            with self.assertRaises(HTTPError) as e:self.request('/mot-de-passe-oublie', data=b'identifier=alice', headers={'Origin':'https://evil.example'})
+            self.assertEqual(e.exception.code,403);e.exception.close()
+            for _ in range(10):
+                try:self.request('/mot-de-passe-oublie', data=b'identifier=x').close()
+                except HTTPError as error:error.close()
+            with self.assertRaises(HTTPError) as e:self.request('/mot-de-passe-oublie', data=b'identifier=y')
+            self.assertEqual(e.exception.code,429);e.exception.close()
+        shared.SharedHandler.reset_requests.clear()
+
+    def test_native_form_login_redirects_with_session(self):
+        import http.client
+        def post(body):
+            c = http.client.HTTPConnection('127.0.0.1', self.server.server_port)
+            c.request('POST', '/login', body, {'Content-Type': 'application/x-www-form-urlencoded'})
+            r = c.getresponse(); r.read(); c.close(); return r
+        r = post('username=alice&password=test-password-123&website=')
+        self.assertEqual((r.status, r.getheader('Location')), (303, '/'))
+        cookie = r.getheader('Set-Cookie').split(';')[0]
+        with self.request('/', headers={'Cookie': cookie}) as page:self.assertEqual(page.status, 200)
+        for body in ('username=alice&password=wrong-password-1', 'username=alice&password=test-password-123&website=spam'):
+            r = post(body)
+            self.assertEqual((r.status, r.getheader('Location'), r.getheader('Set-Cookie')), (303, '/?erreur=1', None))
+        with self.assertRaises(HTTPError) as e:self.request('/')
+        self.assertIn(b'method="post" action="/login"', e.exception.read());e.exception.close()
+
+    def test_robots_are_kept_out(self):
+        with self.request('/robots.txt') as r:
+            self.assertIn(b'Disallow: /', r.read())
+            self.assertIn('noindex', r.headers['X-Robots-Tag'])
+        with self.assertRaises(HTTPError) as e:self.request('/')
+        self.assertIn('noindex', e.exception.headers['X-Robots-Tag'])
+        self.assertIn(b'name="website"', e.exception.read());e.exception.close()
+        # Correct password, but the hidden field is filled: refused like a wrong password.
+        body = json.dumps({'username':'alice','password':'test-password-123','website':'https://spam.example'}).encode()
+        with self.assertRaises(HTTPError) as e:self.request('/login', data=body, headers={'Content-Type':'application/json'})
+        self.assertEqual(e.exception.code,401);self.assertNotIn('Set-Cookie', e.exception.headers);e.exception.close()
+        body = json.dumps({'username':'alice','password':'test-password-123','website':''}).encode()
+        with self.request('/login', data=body, headers={'Content-Type':'application/json'}) as r:self.assertIn('Set-Cookie', r.headers)
+        shared.SharedHandler.reset_requests.clear()
+        with patch.object(shared, 'send_reset') as send:
+            with self.request('/mot-de-passe-oublie', data=b'identifier=alice&website=spam') as r:self.assertIn('Si ce compte existe', r.read().decode())
+            time.sleep(0.2)
+            send.assert_not_called()
 
     def test_settings_are_admin_only_and_never_return_password(self):
         config=self.root/'administrators.json';config.write_text('["alice"]')

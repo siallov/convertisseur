@@ -2,6 +2,10 @@
 """Assistant local pour une nouvelle installation ; secrets saisis hors du chat."""
 import base64
 import getpass
+try:
+    import readline  # noqa: F401 -- flèches et effacement dans les saisies
+except ImportError:
+    pass
 import json
 import sys
 from urllib.error import HTTPError, URLError

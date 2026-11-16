@@ -13,6 +13,10 @@ Seuls les comptes créés par cette synchronisation sont supprimés ; les autres
 import argparse
 import base64
 import getpass
+try:
+    import readline  # noqa: F401 -- flèches et effacement dans les saisies
+except ImportError:
+    pass
 import json
 import os
 import re
@@ -102,19 +106,25 @@ def activation_link(user):
     return f'{base}/activation?token={activation.create(user)}'
 
 
-def send_mail(address, user, link):
+def send_mail(address, user, link, reset=False):
     """True only if the message was handed to the SMTP server."""
     config = smtp_config()
     if not config or not re.fullmatch(r'[^@\s]+@[^@\s]+\.[^@\s]+', address):
         return False
     message = EmailMessage()
-    message['Subject'] = 'Votre accès au convertisseur de partitions'
+    message['Subject'] = 'Nouveau mot de passe pour le convertisseur de partitions' if reset else 'Votre accès au convertisseur de partitions'
     message['From'] = config['from']
     message['To'] = address
-    message.set_content(
-        'Bonjour,\n\nUn compte vient de vous être créé pour le convertisseur de partitions de la chorale.\n'
-        f'Votre identifiant : {user}\n\nChoisissez votre mot de passe avec ce lien personnel (valable 48 heures, à usage unique) :\n{link}\n\n'
-        'Si vous n’attendiez pas ce message, ignorez-le.\n')
+    if reset:
+        message.set_content(
+            'Bonjour,\n\nUne demande de nouveau mot de passe a été faite pour votre compte du convertisseur de partitions.\n'
+            f'Votre identifiant : {user}\n\nChoisissez un nouveau mot de passe avec ce lien personnel (valable 48 heures, à usage unique) :\n{link}\n\n'
+            'Si vous n’êtes pas à l’origine de cette demande, ignorez ce message : votre mot de passe actuel reste valable.\n')
+    else:
+        message.set_content(
+            'Bonjour,\n\nUn compte vient de vous être créé pour le convertisseur de partitions de la chorale.\n'
+            f'Votre identifiant : {user}\n\nChoisissez votre mot de passe avec ce lien personnel (valable 48 heures, à usage unique) :\n{link}\n\n'
+            'Si vous n’attendiez pas ce message, ignorez-le.\n')
     try:
         with smtplib.SMTP_SSL(config['host'], int(config['port']), timeout=30) as server:
             server.login(config['user'], config['password'])
@@ -122,6 +132,27 @@ def send_mail(address, user, link):
         return True
     except (OSError, smtplib.SMTPException):
         return False
+
+
+def reset_password(identifier):
+    """Email a new link to the synchronised account matching this username or Paheko e-mail.
+
+    Returns the number of messages sent. Manual accounts (no Paheko e-mail) are never matched.
+    """
+    wanted = (identifier or '').strip().lower()
+    if not wanted or len(wanted) > 200:
+        return 0
+    try:
+        managed = json.loads(MANAGED.read_text())
+    except (OSError, ValueError):
+        return 0
+    accounts = shared_server.accounts()
+    sent = 0
+    for member_id, _, email in fetch_members(load_config()):
+        user = managed.get(str(member_id))
+        if user in accounts and email and wanted in (user.lower(), email.lower()):
+            sent += send_mail(email, user, activation_link(user), reset=True)
+    return sent
 
 
 def sync(members, dry_run=False, allow_empty=False):

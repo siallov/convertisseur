@@ -112,6 +112,23 @@ class SyncTests(unittest.TestCase):
         self.assertIn('/activation?token=', message.get_content())
         self.assertFalse(sm.PENDING.exists())
 
+    def test_reset_sends_link_only_to_synchronised_member(self):
+        sm.MANAGED.write_text(json.dumps({'7': 'dupont-jean-7'}))
+        shared_server.store_account('dupont-jean-7', 'old-password-123')
+        members = [(7, 'Dupont Jean', 'Jean@Example.org'), (8, 'Autre', 'autre@example.org')]
+        with patch.object(sm, 'load_config', return_value={}), patch.object(sm, 'fetch_members', return_value=members), \
+                patch.object(sm, 'send_mail', return_value=True) as send:
+            self.assertEqual(sm.reset_password('dupont-jean-7'), 1)
+            self.assertEqual(sm.reset_password(' jean@example.org '), 1)
+            self.assertEqual(sm.reset_password('autre@example.org'), 0)  # not managed
+            self.assertEqual(sm.reset_password('andre'), 0)  # manual account, no e-mail
+            self.assertEqual(sm.reset_password(''), 0)
+        self.assertEqual(send.call_count, 2)
+        address, user, link = send.call_args.args
+        self.assertEqual((address, user, send.call_args.kwargs), ('Jean@Example.org', 'dupont-jean-7', {'reset': True}))
+        self.assertEqual(activation.lookup(link.split('token=')[1]), 'dupont-jean-7')
+        self.assertIn('dupont-jean-7', shared_server.accounts())  # old password still valid until the link is used
+
     def test_activation_link_is_single_use_and_sets_password(self):
         sm.sync([(1, 'Alice A', '')])
         token = sm.PENDING.read_text().split('token=')[1].split()[0]

@@ -10,6 +10,7 @@ import shlex
 import shutil
 import subprocess
 import threading
+import time
 import uuid
 import xml.etree.ElementTree as ET
 import zipfile
@@ -172,7 +173,7 @@ def download_name(job, filename):
 
 def convert(job_id, command):
     folder = DATA / job_id
-    update(job_id, status='running', message='Reconnaissance de la partition en cours…')
+    update(job_id, status='running', message='Reconnaissance de la partition en cours…', started=time.time())
     try:
         log = folder / 'conversion.log'
         resolution_options = pdf_resolution_options(folder / 'source.pdf')
@@ -238,6 +239,7 @@ def publish_job(job_id):
         payload.append((stem + '.pdf', folder / 'source.pdf'))
         metadata = folder / 'classification.json'
         classification={k: job.get(k, '') for k in ('title', 'composer', 'part', 'song_id')}
+        if job.get('owner'):classification['requested_by']=job['owner']
         if (folder/'pupitres.json').is_file():classification['pupitres']=json.loads((folder/'pupitres.json').read_text())
         metadata.write_text(json.dumps(classification, ensure_ascii=False))
         payload.append((stem + '.partition.json', metadata))
@@ -264,6 +266,66 @@ def publish_job(job_id):
         update(job_id, status='review', upload='failed', message='Dépôt impossible. Vos résultats restent disponibles.', error_code='upload_failed', action='Réessayez le dépôt ou téléchargez les fichiers.')
 
 
+# Audiveris processes each page through these steps, in this order.
+STEPS = ('LOAD', 'BINARY', 'SCALE', 'GRID', 'HEADERS', 'STEM_SEEDS', 'BEAMS', 'LEDGERS', 'HEADS', 'STEMS',
+         'REDUCTION', 'CUE_BEAMS', 'TEXTS', 'MEASURES', 'CHORDS', 'CURVES', 'SYMBOLS', 'LINKS', 'RHYTHMS', 'PAGE')
+STEP_LABELS = {'LOAD': 'Lecture de l’image', 'BINARY': 'Lecture de l’image', 'SCALE': 'Repérage des portées',
+               'GRID': 'Repérage des portées', 'HEADERS': 'Clés et armures', 'TEXTS': 'Lecture des paroles',
+               'MEASURES': 'Mesures et accords', 'CHORDS': 'Mesures et accords', 'CURVES': 'Liaisons et symboles',
+               'SYMBOLS': 'Liaisons et symboles', 'LINKS': 'Liaisons et symboles', 'RHYTHMS': 'Rythmes',
+               'PAGE': 'Mise en page'}
+STEP_PATTERN = re.compile(r'\[[^\]\s]*#(\d+)\]\s+StepMonitoring\s+\d+\s*\|\s*([A-Z_]+)')
+
+
+def log_progress(text):
+    """Estimate progress from the Audiveris log: pages count equally, export takes the last 5 %."""
+    sheets = re.search(r'\|\s*(\d+) sheets? in ', text)
+    total = int(sheets[1]) if sheets else 0
+    if 'Exporting sheet' in text or 'ScoreExporter' in text:
+        return {'percent': 97, 'step': 'Export du MusicXML', 'sheet': total, 'sheets': total}
+    steps = STEP_PATTERN.findall(text)
+    if not total or not steps:
+        return {'percent': 0, 'step': 'Démarrage du moteur', 'sheet': 0, 'sheets': total}
+    sheet, step = int(steps[-1][0]), steps[-1][1]
+    index = STEPS.index(step) if step in STEPS else 0
+    done = min(total, sheet - 1 + index / len(STEPS))
+    return {'percent': min(95, round(95 * done / total)), 'step': STEP_LABELS.get(step, 'Détection des notes'),
+            'sheet': min(sheet, total), 'sheets': total}
+
+
+def read_log(path, head=16384, tail=65536):
+    """Return the start and end of a log without loading a huge file."""
+    try:
+        with path.open('rb') as stream:
+            size = stream.seek(0, 2)
+            stream.seek(0)
+            if size <= head + tail:
+                return stream.read().decode('utf-8', 'replace')
+            start = stream.read(head)
+            stream.seek(size - tail)
+            return (start + b'\n' + stream.read()).decode('utf-8', 'replace')
+    except OSError:
+        return ''
+
+
+def job_views(items):
+    """Public job list: running jobs get progress and elapsed time, queued ones their place in line."""
+    with LOCK:
+        order = [k for k, v in JOBS.items() if v.get('status') in ('queued', 'running')]
+        views = [dict(id=k, **v) for k, v in items]
+    for view in views:
+        if view.get('status') == 'running':
+            progress = log_progress(read_log(DATA / view['id'] / 'conversion.log'))
+            elapsed = max(0, time.time() - (view.get('started') or time.time()))
+            progress['elapsed'] = round(elapsed)
+            if progress['percent'] >= 10 and progress['step'] != 'Export du MusicXML':
+                progress['remaining'] = round(elapsed * (100 - progress['percent']) / progress['percent'])
+            view['progress'] = progress
+        elif view.get('status') == 'queued' and view['id'] in order:
+            view['ahead'] = order.index(view['id'])
+    return views
+
+
 ACTIVE = ('queued', 'running', 'publishing')
 
 
@@ -283,9 +345,9 @@ def retry_job(job_id):
             return 410, {'error': 'Le PDF d’origine n’est plus disponible. Importez-le de nouveau.'}
         if sum(j['status'] in ('queued', 'running') for j in JOBS.values()) >= 4:
             return 429, {'error': 'La file est pleine. Attendez la fin d’une conversion.'}
-        job.update(status='queued', message='En attente du moteur OMR…', files=[], action='', error_code='', upload='', reader_links=[])
+        job.update(status='queued', message='En attente du moteur OMR…', files=[], action='', error_code='', upload='', reader_links=[], started=None)
     shutil.rmtree(folder / 'output', ignore_errors=True)
-    for stale in [*folder.glob('partition-*'), folder / 'result.json']:
+    for stale in [*folder.glob('partition-*'), folder / 'result.json', folder / 'conversion.log']:
         stale.unlink(missing_ok=True)
     POOL.submit(convert, job_id, command)
     return 202, {'id': job_id, 'status': 'queued'}
@@ -336,7 +398,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.json_response(200, {'engine': bool(engine_command())})
         if path == '/api/jobs':
             with LOCK:
-                values = [dict(id=k, **v) for k, v in reversed(list(JOBS.items()))]
+                items = list(reversed(list(JOBS.items())))
+            values = job_views(items)
             return self.json_response(200, values)
         match = re.fullmatch(r'/api/jobs/([a-f0-9]{32})(?:/([a-z0-9.-]+))?', path)
         if match:
