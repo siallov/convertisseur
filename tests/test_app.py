@@ -119,6 +119,108 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual(views[queued]['ahead'], 1)
         self.assertNotIn('progress', app.JOBS[running])
 
+    def fake_engine(self, folder, outcomes, seen):
+        """Each call plays the next outcome: 'ok' exports a score, a step name crashes there."""
+        crash_log = 'INFO  [source]  Book 560  | 4 sheets in x\nINFO  [source#2]  StepMonitoring 98   | {}\n'
+        def engine(command, stdout, **kwargs):
+            seen.append(command)
+            outcome = outcomes[len(seen) - 1]
+            if outcome == 'ok':
+                output = folder / 'output'
+                output.mkdir(parents=True)
+                with zipfile.ZipFile(output / 'source.mxl', 'w') as archive:
+                    archive.writestr('META-INF/container.xml', '<container><rootfiles><rootfile full-path="s.xml"/></rootfiles></container>')
+                    archive.writestr('s.xml', '<score-partwise version="4.0"><part-list/></score-partwise>')
+                stdout.write('INFO  [source]  PartwiseBuilder 2707 | Exporting sheet(s)\nEnd of Book\n')
+                return type('Result', (), {'returncode': 0})()
+            stdout.write(crash_log.format(outcome))
+            return type('Result', (), {'returncode': 1})()
+        return engine
+
+    def test_text_crash_is_retried_then_converted_without_text(self):
+        job_id = 'c' * 32
+        folder = self.data / job_id
+        folder.mkdir()
+        (folder / 'source.pdf').write_bytes(b'%PDF-1.4\n')
+        app.JOBS[job_id] = {'status': 'queued', 'files': []}
+        seen = []
+        with patch.object(app.subprocess, 'run', side_effect=self.fake_engine(folder, ['TEXTS', 'TEXTS', 'ok'], seen)):
+            app.convert(job_id, ['audiveris'])
+        self.assertEqual(len(seen), 3)
+        self.assertNotIn(app.WITHOUT_TEXT[1], seen[1])
+        self.assertIn(app.WITHOUT_TEXT[1], seen[2])
+        job = app.JOBS[job_id]
+        self.assertEqual((job['status'], job['without_text']), ('review', True))
+        self.assertIn('sans les paroles', job['message'])
+        log = (folder / 'conversion.log').read_text()
+        self.assertEqual(app.attempt_count(log), 3)
+        self.assertIn('sans reconnaissance du texte', log)
+
+    def test_repeated_crash_reports_step_and_page(self):
+        job_id = 'd' * 32
+        folder = self.data / job_id
+        folder.mkdir()
+        (folder / 'source.pdf').write_bytes(b'%PDF-1.4\n')
+        app.JOBS[job_id] = {'status': 'queued', 'files': []}
+        seen = []
+        with patch.object(app.subprocess, 'run', side_effect=self.fake_engine(folder, ['CHORDS'] * 3, seen)):
+            app.convert(job_id, ['audiveris'])
+        job = app.JOBS[job_id]
+        self.assertEqual((job['status'], job['error_code'], len(seen)), ('error', 'engine_crash', 3))
+        self.assertIn('mesures et accords', job['message'])
+        self.assertIn('page 2 sur 4', job['message'])
+        self.assertIn('3 tentatives', job['message'])
+
+    def test_known_failure_is_not_retried(self):
+        job_id = 'e' * 32
+        folder = self.data / job_id
+        folder.mkdir()
+        (folder / 'source.pdf').write_bytes(b'%PDF-1.4\n')
+        app.JOBS[job_id] = {'status': 'queued', 'files': []}
+        def engine(command, stdout, **kwargs):
+            stdout.write('Error loading invalid PDF\n')
+            return type('Result', (), {'returncode': 1})()
+        with patch.object(app.subprocess, 'run', side_effect=engine) as run:
+            app.convert(job_id, ['audiveris'])
+        self.assertEqual((run.call_count, app.JOBS[job_id]['error_code']), (1, 'unreadable_pdf'))
+
+    def test_interrupted_conversion_resumes_at_most_twice(self):
+        job_id = 'f' * 32
+        folder = self.data / job_id
+        folder.mkdir()
+        (folder / 'source.pdf').write_bytes(b'%PDF-1.4\n')
+        (folder / 'name.txt').write_text('chant.pdf')
+        finished = 'a' * 32
+        (self.data / finished).mkdir()
+        (self.data / finished / 'result.json').write_text('{"status": "error", "message": "x"}')
+        with patch.object(app, 'engine_command', return_value=['audiveris']), patch.object(app.POOL, 'submit') as submit:
+            for expected in (1, 1, 0):
+                app.JOBS.clear()
+                for f in (folder, self.data / finished):
+                    app.JOBS[f.name] = app.restore_job(f)
+                self.assertEqual(len(app.resume_interrupted()), expected)
+            self.assertEqual([c.args[1] for c in submit.call_args_list], [job_id, job_id])
+        self.assertIn('plusieurs fois', app.JOBS[job_id]['message'])
+        self.assertEqual(app.JOBS[finished]['status'], 'error')
+        app.JOBS[job_id]['status'] = 'error'
+        with patch.object(app, 'engine_command', return_value=['audiveris']), patch.object(app.POOL, 'submit'):
+            app.retry_job(job_id)  # a manual retry resets the counter
+        self.assertFalse((folder / 'reprises').exists())
+
+    def test_local_cleanup_only_removes_old_deposits(self):
+        import os
+        old_sent, recent_sent, old_review = 'a' * 32, 'b' * 32, 'c' * 32
+        for job_id, status, upload in ((old_sent, 'done', 'sent'), (recent_sent, 'done', 'sent'), (old_review, 'review', 'pending')):
+            (self.data / job_id).mkdir()
+            result = self.data / job_id / 'result.json'
+            result.write_text('{}')
+            if job_id != recent_sent:
+                os.utime(result, (0, 0))
+            app.JOBS[job_id] = {'status': status, 'upload': upload, 'files': []}
+        self.assertEqual(app.cleanup_published(7), [old_sent])
+        self.assertFalse((self.data / old_sent).exists())
+        self.assertEqual(sorted(app.JOBS), [recent_sent, old_review])
+
     def test_failure_is_reported(self):
         job_id = 'b' * 32
         (self.data / job_id).mkdir()

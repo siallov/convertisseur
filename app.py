@@ -171,62 +171,149 @@ def download_name(job, filename):
     return f'{stem}.{match[2]}' if match[1] == '1' else f'{stem}-{match[1]}.{match[2]}'
 
 
+CONVERSION_TIMEOUT = 1800  # seconds, all attempts included
+MAX_ATTEMPTS = 3
+ATTEMPT_MARK = '=== Nouvelle tentative'
+# Tesseract (text recognition) sometimes crashes the whole engine; the notes can still be read without it.
+WITHOUT_TEXT = ['-constant', 'org.audiveris.omr.text.tesseract.TesseractOCR.useOCR=false']
+
+
+def last_attempt(text):
+    """The part of the log written by the most recent engine run."""
+    return text.rsplit(ATTEMPT_MARK, 1)[-1]
+
+
+def attempt_count(text):
+    return text.count(ATTEMPT_MARK) + 1
+
+
+def engine_stop(text):
+    """Where Audiveris stopped if it quit in the middle of a page, else None."""
+    if 'End of Book' in text or 'Exporting sheet' in text:
+        return None
+    steps = STEP_PATTERN.findall(text)
+    if not steps:
+        return None
+    sheets = re.search(r'\|\s*(\d+) sheets? in ', text)
+    return {'sheet': int(steps[-1][0]), 'sheets': int(sheets[1]) if sheets else 0, 'step': steps[-1][1]}
+
+
+def stop_description(stop):
+    where = f'pendant l’étape « {STEP_LABELS.get(stop["step"], "Détection des notes").lower()} »'
+    if stop['sheets'] > 1:
+        where += f', page {stop["sheet"]} sur {stop["sheets"]}'
+    return where
+
+
+def failure(text, attempts):
+    """Return (code, message, action) for a failed conversion, from the last engine run."""
+    code, message, action = diagnose(text)
+    stop = engine_stop(text)
+    if code != 'recognition' or 'portées' in message or not stop:
+        return code, message + ' Consultez le journal de conversion.', action
+    tries = f', même après {attempts} tentatives' if attempts > 1 else ''
+    return ('engine_crash', f'Le moteur Audiveris s’est arrêté {stop_description(stop)}{tries}.',
+            'Relancez la conversion plus tard. Si le problème persiste, découpez le PDF pour isoler cette page '
+            'ou contactez l’administrateur.')
+
+
+def run_engine(command, folder, options, deadline, attempt):
+    """One Audiveris run, appended to conversion.log. Returns the exit code."""
+    shutil.rmtree(folder / 'output', ignore_errors=True)
+    environment = os.environ.copy()
+    environment['JAVA_TOOL_OPTIONS'] = (environment.get('JAVA_TOOL_OPTIONS', '') + ' -Djava.awt.headless=true').strip()
+    arguments = command + ['-batch', '-transcribe', '-export'] + options
+    arguments += ['-output', str(folder / 'output'), '--', str(folder / 'source.pdf')]
+    with (folder / 'conversion.log').open('a' if attempt > 1 else 'w') as stream:
+        if attempt > 1:
+            without = ' sans reconnaissance du texte' if WITHOUT_TEXT[1] in options else ''
+            stream.write(f'\n{ATTEMPT_MARK} ({attempt}/{MAX_ATTEMPTS}){without} ===\n')
+            stream.flush()
+        timeout = max(1, deadline - time.monotonic())
+        return subprocess.run(arguments, check=False, stdout=stream, stderr=subprocess.STDOUT,
+                              timeout=timeout, env=environment).returncode
+
+
+def collect_results(folder):
+    """Copy each exported movement as partition-N.mxl and its uncompressed MusicXML."""
+    files = []
+    for index, source in enumerate(sorted((folder / 'output').rglob('*.mxl')), 1):
+        target = folder / f'partition-{index}.mxl'
+        shutil.copyfile(source, target)
+        xml = folder / f'partition-{index}.musicxml'
+        extract_musicxml(target, xml)
+        files.extend([target.name, xml.name])
+    return files
+
+
+def write_identity(path, title, composer):
+    """Store the title and composer chosen at import inside the MusicXML."""
+    tree = ET.parse(path)
+    root = tree.getroot()
+    if title:
+        work = root.find('work')
+        if work is None:
+            work = ET.Element('work')
+            root.insert(0, work)
+        work_title = work.find('work-title')
+        if work_title is None:
+            work_title = ET.SubElement(work, 'work-title')
+        work_title.text = title
+    if composer:
+        identity = root.find('identification')
+        if identity is None:
+            identity = ET.Element('identification')
+            root.insert(1 if root.find('work') is not None else 0, identity)
+        creator = identity.find("creator[@type='composer']")
+        if creator is None:
+            creator = ET.Element('creator', {'type': 'composer'})
+            identity.insert(0, creator)
+        creator.text = composer
+    tree.write(path, encoding='utf-8', xml_declaration=True)
+
+
 def convert(job_id, command):
     folder = DATA / job_id
     update(job_id, status='running', message='Reconnaissance de la partition en cours…', started=time.time())
     try:
-        log = folder / 'conversion.log'
-        resolution_options = pdf_resolution_options(folder / 'source.pdf')
-        environment = os.environ.copy()
-        environment['JAVA_TOOL_OPTIONS'] = (environment.get('JAVA_TOOL_OPTIONS', '') + ' -Djava.awt.headless=true').strip()
-        with log.open('w') as stream:
-            result = subprocess.run(command + ['-batch', '-transcribe', '-export'] + resolution_options + ocr_language_options() + ['-output', str(folder / 'output'), '--', str(folder / 'source.pdf')], check=False, stdout=stream, stderr=subprocess.STDOUT, timeout=1800, env=environment)
-        if result.returncode:
-            code, message, action = diagnose(log.read_text(errors='replace'))
-            update(job_id, status='error', error_code=code, message=message + ' Consultez le journal de conversion.', action=action)
-            return
-        files = []
-        for index, source in enumerate(sorted((folder / 'output').rglob('*.mxl')), 1):
-            target = folder / f'partition-{index}.mxl'
-            shutil.copyfile(source, target)
-            xml = folder / f'partition-{index}.musicxml'
-            extract_musicxml(target, xml)
-            files.extend([target.name, xml.name])
-        if not files:
-            raise RuntimeError('Audiveris n’a produit aucune partition MXL. Consultez le journal.')
+        options = pdf_resolution_options(folder / 'source.pdf') + ocr_language_options()
+        deadline = time.monotonic() + CONVERSION_TIMEOUT
+        without_text = False
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            returncode = run_engine(command, folder, options + (WITHOUT_TEXT if without_text else []), deadline, attempt)
+            if returncode == 0 and any((folder / 'output').rglob('*.mxl')):
+                break
+            text = last_attempt(read_log(folder / 'conversion.log'))
+            stop = engine_stop(text)
+            if stop is None or attempt == MAX_ATTEMPTS:
+                code, message, action = failure(text, attempt)
+                update(job_id, status='error', error_code=code, message=message, action=action)
+                return
+            # A second crash while reading text: try once more without text recognition.
+            without_text = without_text or (stop['step'] == 'TEXTS' and attempt >= 2)
+            update(job_id, message=f'Le moteur s’est arrêté {stop_description(stop)}. '
+                                   f'Nouvelle tentative automatique ({attempt + 1}/{MAX_ATTEMPTS})…')
+        files = collect_results(folder)
         with LOCK:
             job = dict(JOBS[job_id])
-        for name in files:
-            if name.endswith('.musicxml') and (job.get('title') or job.get('composer')):
-                tree = ET.parse(folder / name)
-                root = tree.getroot()
-                if job.get('title'):
-                    work = root.find('work')
-                    if work is None:
-                        work = ET.Element('work')
-                        root.insert(0, work)
-                    title = work.find('work-title')
-                    if title is None:
-                        title = ET.SubElement(work, 'work-title')
-                    title.text = job['title']
-                if job.get('composer'):
-                    identity = root.find('identification')
-                    if identity is None:
-                        identity = ET.Element('identification')
-                        root.insert(1 if root.find('work') is not None else 0, identity)
-                    creator = identity.find("creator[@type='composer']")
-                    if creator is None:
-                        creator = ET.Element('creator', {'type': 'composer'})
-                        identity.insert(0, creator)
-                    creator.text = job['composer']
-                tree.write(folder / name, encoding='utf-8', xml_declaration=True)
-        update(job_id, status='review', message='Reconnaissance terminée. Vérifiez la partition et écoutez-la avant de la déposer dans Paheko.', files=files, upload='pending', reader_links=[], action='Ouvrez « Vérifier et écouter », puis validez le dépôt.')
-
+        if job.get('title') or job.get('composer'):
+            for name in files:
+                if name.endswith('.musicxml'):
+                    write_identity(folder / name, job.get('title'), job.get('composer'))
+        (folder / 'reprises').unlink(missing_ok=True)
+        message = 'Reconnaissance terminée. Vérifiez la partition et écoutez-la avant de la déposer dans Paheko.'
+        if without_text:
+            message = ('Reconnaissance terminée sans les paroles ni les textes : le moteur s’arrêtait en les lisant. '
+                       'Les notes sont là ; vérifiez la partition et écoutez-la avant de la déposer dans Paheko.')
+        update(job_id, status='review', message=message, files=files, upload='pending', reader_links=[],
+               without_text=without_text, action='Ouvrez « Vérifier et écouter », puis validez le dépôt.')
     except subprocess.TimeoutExpired:
-        update(job_id, status='error', message='La conversion a dépassé la limite de 30 minutes.', error_code='timeout', action='Découpez le PDF en plusieurs parties et réimportez une partie.')
+        update(job_id, status='error', message='La conversion a dépassé la limite de 30 minutes.', error_code='timeout',
+               action='Découpez le PDF en plusieurs parties et réimportez une partie.')
     except Exception:
         LOGGER.exception('Conversion worker failed for job %s', job_id)
-        update(job_id, status='error', message='Le traitement de la partition a échoué.', error_code='processing', action='Consultez le journal et réimportez le PDF. Contactez l’administrateur si le problème persiste.')
+        update(job_id, status='error', message='Le traitement de la partition a échoué.', error_code='processing',
+               action='Consultez le journal et réimportez le PDF. Contactez l’administrateur si le problème persiste.')
 
 
 def publish_job(job_id):
@@ -238,9 +325,11 @@ def publish_job(job_id):
         stem = score_stem(job) or 'partition'
         payload.append((stem + '.pdf', folder / 'source.pdf'))
         metadata = folder / 'classification.json'
-        classification={k: job.get(k, '') for k in ('title', 'composer', 'part', 'song_id')}
-        if job.get('owner'):classification['requested_by']=job['owner']
-        if (folder/'pupitres.json').is_file():classification['pupitres']=json.loads((folder/'pupitres.json').read_text())
+        classification = {k: job.get(k, '') for k in ('title', 'composer', 'part', 'song_id')}
+        if job.get('owner'):
+            classification['requested_by'] = job['owner']
+        if (folder / 'pupitres.json').is_file():
+            classification['pupitres'] = json.loads((folder / 'pupitres.json').read_text())
         metadata.write_text(json.dumps(classification, ensure_ascii=False))
         payload.append((stem + '.partition.json', metadata))
         try:
@@ -315,7 +404,9 @@ def job_views(items):
         views = [dict(id=k, **v) for k, v in items]
     for view in views:
         if view.get('status') == 'running':
-            progress = log_progress(read_log(DATA / view['id'] / 'conversion.log'))
+            text = read_log(DATA / view['id'] / 'conversion.log')
+            progress = log_progress(last_attempt(text))
+            progress['attempt'] = attempt_count(text)
             elapsed = max(0, time.time() - (view.get('started') or time.time()))
             progress['elapsed'] = round(elapsed)
             if progress['percent'] >= 10 and progress['step'] != 'Export du MusicXML':
@@ -329,7 +420,7 @@ def job_views(items):
 ACTIVE = ('queued', 'running', 'publishing')
 
 
-def retry_job(job_id):
+def retry_job(job_id, automatic=False):
     """Run the stored PDF through the engine again after a failure or interruption."""
     command = engine_command()
     if not command:
@@ -347,8 +438,11 @@ def retry_job(job_id):
             return 429, {'error': 'La file est pleine. Attendez la fin d’une conversion.'}
         job.update(status='queued', message='En attente du moteur OMR…', files=[], action='', error_code='', upload='', reader_links=[], started=None)
     shutil.rmtree(folder / 'output', ignore_errors=True)
-    for stale in [*folder.glob('partition-*'), folder / 'result.json', folder / 'conversion.log']:
-        stale.unlink(missing_ok=True)
+    stale = [*folder.glob('partition-*'), folder / 'result.json', folder / 'conversion.log']
+    if not automatic:
+        stale.append(folder / 'reprises')
+    for path in stale:
+        path.unlink(missing_ok=True)
     POOL.submit(convert, job_id, command)
     return 202, {'id': job_id, 'status': 'queued'}
 
@@ -364,6 +458,86 @@ def delete_job(job_id):
         del JOBS[job_id]
     shutil.rmtree(DATA / job_id, ignore_errors=True)
     return 200, {'deleted': job_id}
+
+
+MAX_RESUMES = 2  # automatic restarts of the same interrupted conversion
+
+
+def restore_job(folder, extra=None):
+    """Rebuild a job from its folder after a restart."""
+    files = sorted(p.name for p in folder.iterdir() if p.suffix in ('.musicxml', '.mxl'))
+    details = job_details(folder)
+    job = {**(extra or {}), 'name': stored_name(folder), 'status': 'done' if files else 'error',
+           'message': 'Résultats restaurés.' if files else 'Conversion interrompue. Cliquez sur « Relancer la conversion ».',
+           'files': files, **details}
+    # No final result was ever written: the service stopped during the conversion.
+    if not files and 'status' not in details and (folder / 'source.pdf').is_file():
+        job['interrupted'] = True
+    return job
+
+
+def resume_interrupted():
+    """Put conversions stopped by a restart back in the queue, at most MAX_RESUMES times each."""
+    if not engine_command():
+        return []
+    resumed = []
+    for job_id, job in list(JOBS.items()):
+        if not job.pop('interrupted', False):
+            continue
+        counter = DATA / job_id / 'reprises'
+        try:
+            count = int(counter.read_text())
+        except (OSError, ValueError):
+            count = 0
+        if count >= MAX_RESUMES:
+            job['message'] = 'Conversion interrompue plusieurs fois. Cliquez sur « Relancer la conversion ».'
+            continue
+        counter.write_text(str(count + 1))
+        if retry_job(job_id, automatic=True)[0] == 202:
+            resumed.append(job_id)
+    return resumed
+
+
+def cleanup_published(days):
+    """Local mode: remove conversions already deposited in Paheko, `days` after the deposit."""
+    limit = time.time() - days * 86400
+    with LOCK:
+        expired = []
+        for job_id, job in JOBS.items():
+            result = DATA / job_id / 'result.json'
+            if job.get('status') == 'done' and job.get('upload') == 'sent' and result.is_file() and result.stat().st_mtime < limit:
+                expired.append(job_id)
+        for job_id in expired:
+            del JOBS[job_id]
+    for job_id in expired:
+        shutil.rmtree(DATA / job_id, ignore_errors=True)
+    return expired
+
+
+ASSETS = {
+    '/': ('index.html', 'text/html; charset=utf-8'),
+    '/app.js': ('app.js', 'text/javascript; charset=utf-8'),
+    '/style.css': ('style.css', 'text/css; charset=utf-8'),
+    '/preview': ('preview.html', 'text/html; charset=utf-8'),
+    '/review.js': ('review.js', 'text/javascript; charset=utf-8'),
+    '/score-engine.js': ('score-engine.js', 'text/javascript; charset=utf-8'),
+    '/admin.js': ('admin.js', 'text/javascript; charset=utf-8'),
+    '/vendor/piano.json': ('vendor/piano.json', 'application/json'),
+    '/vendor/oohs.json': ('vendor/voice_oohs.json', 'application/json'),
+    '/vendor/choir.json': ('vendor/choir_aahs.json', 'application/json'),
+    '/vendor/osmd.js': ('vendor/opensheetmusicdisplay.min.js', 'text/javascript; charset=utf-8'),
+}
+FILE_TYPES = {
+    '.pdf': 'application/pdf',
+    '.log': 'text/plain; charset=utf-8',
+    '.musicxml': 'application/vnd.recordare.musicxml+xml',
+    '.mxl': 'application/vnd.recordare.musicxml',
+}
+
+
+def can_edit_pupitres(job):
+    """Pupitres are named during review, or after a deposit that failed."""
+    return job.get('status') == 'review' or (job.get('status') == 'done' and job.get('upload') == 'failed')
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -408,21 +582,23 @@ class Handler(BaseHTTPRequestHandler):
                 job = dict(JOBS.get(job_id, {}))
             if not job:
                 return self.json_response(404, {'error': 'Conversion introuvable.'})
+            if filename == 'pupitres':
+                source = parse_qs(urlparse(self.path).query).get('file', [''])[0]
+                if source not in job.get('files', []):
+                    return self.json_response(404, {'error': 'Partition introuvable.'})
+                try:
+                    return self.json_response(200, pupitres.describe(DATA / job_id, source))
+                except (ValueError, OSError):
+                    return self.json_response(400, {'error': 'MusicXML illisible.'})
             if filename:
-                if filename == 'pupitres':
-                    source = parse_qs(urlparse(self.path).query).get('file',[''])[0]
-                    if source not in job.get('files',[]):
-                        return self.json_response(404,{'error':'Partition introuvable.'})
-                    try:return self.json_response(200,pupitres.describe(DATA/job_id,source))
-                    except (ValueError,OSError):return self.json_response(400,{'error':'MusicXML illisible.'})
                 if filename not in job.get('files', []) + ['source.pdf', 'conversion.log']:
                     return self.json_response(404, {'error': 'Fichier introuvable.'})
-                mime = 'application/pdf' if filename.endswith('.pdf') else 'text/plain; charset=utf-8' if filename.endswith('.log') else 'application/vnd.recordare.musicxml+xml' if filename.endswith('.musicxml') else 'application/vnd.recordare.musicxml'
-                return self.file_response(DATA / job_id / filename, mime, filename != 'source.pdf', download_name(job, filename))
+                mime = FILE_TYPES[Path(filename).suffix]
+                download = filename != 'source.pdf'
+                return self.file_response(DATA / job_id / filename, mime, download, download_name(job, filename))
             return self.json_response(200, dict(id=job_id, **job))
-        assets = {'/score-engine.js': ('score-engine.js', 'text/javascript; charset=utf-8'), '/preview': ('preview.html', 'text/html; charset=utf-8'), '/review.js': ('review.js', 'text/javascript; charset=utf-8'), '/vendor/piano.json': ('vendor/piano.json', 'application/json'), '/vendor/oohs.json': ('vendor/voice_oohs.json', 'application/json'), '/vendor/choir.json': ('vendor/choir_aahs.json', 'application/json'), '/vendor/osmd.js': ('vendor/opensheetmusicdisplay.min.js', 'text/javascript; charset=utf-8'), '/admin.js': ('admin.js', 'text/javascript; charset=utf-8'), '/': ('index.html', 'text/html; charset=utf-8'), '/app.js': ('app.js', 'text/javascript; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8')}
-        if path in assets:
-            filename, mime = assets[path]
+        if path in ASSETS:
+            filename, mime = ASSETS[path]
             return self.file_response(ROOT / 'static' / filename, mime)
         return self.json_response(404, {'error': 'Page introuvable.'})
 
@@ -434,21 +610,26 @@ class Handler(BaseHTTPRequestHandler):
         naming_match = re.fullmatch(r'/api/jobs/([a-f0-9]{32})/pupitres', urlparse(self.path).path)
         if naming_match:
             try:
-                length=int(self.headers.get('Content-Length','0'))
-                if not 0<length<=524288:raise ValueError()
-                values=json.loads(self.rfile.read(length))
-                if not isinstance(values,dict):raise TypeError()
+                length = int(self.headers.get('Content-Length', '0'))
+                if not 0 < length <= 524288:
+                    raise ValueError()
+                values = json.loads(self.rfile.read(length))
+                if not isinstance(values, dict):
+                    raise TypeError()
                 with LOCK:
-                    job=JOBS.get(naming_match[1])
-                    if not job:return self.json_response(404,{'error':'Conversion introuvable.'})
-                    if job.get('status')!='review' and not (job.get('status')=='done' and job.get('upload')=='failed'):
-                        return self.json_response(409,{'error':'La partition doit être en cours de vérification.'})
-                    if values.get('file') not in job.get('files',[]):raise ValueError()
-                    result=pupitres.save(DATA/naming_match[1],values['file'],values.get('labels'),values.get('corrections'))
-                return self.json_response(200,result)
-            except (ValueError,TypeError,KeyError,StopIteration,zipfile.BadZipFile,ET.ParseError):
-                return self.json_response(400,{'error':'Pupitres invalides. Vérifiez les noms et les lignes reconnues.'})
-            except OSError:return self.json_response(500,{'error':'Impossible d’enregistrer les pupitres.'})
+                    job = JOBS.get(naming_match[1])
+                    if not job:
+                        return self.json_response(404, {'error': 'Conversion introuvable.'})
+                    if not can_edit_pupitres(job):
+                        return self.json_response(409, {'error': 'La partition doit être en cours de vérification.'})
+                    if values.get('file') not in job.get('files', []):
+                        raise ValueError()
+                    result = pupitres.save(DATA / naming_match[1], values['file'], values.get('labels'), values.get('corrections'))
+                return self.json_response(200, result)
+            except (ValueError, TypeError, KeyError, StopIteration, zipfile.BadZipFile, ET.ParseError):
+                return self.json_response(400, {'error': 'Pupitres invalides. Vérifiez les noms et les lignes reconnues.'})
+            except OSError:
+                return self.json_response(500, {'error': 'Impossible d’enregistrer les pupitres.'})
         publish_match = re.fullmatch(r'/api/jobs/([a-f0-9]{32})/publish', urlparse(self.path).path)
         if publish_match:
             with LOCK:
@@ -501,11 +682,18 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == '__main__':
     DATA.mkdir(exist_ok=True)
-    # Restore completed results after restarting the app.
-    for folder in DATA.iterdir():
+    # Restore results after restarting the app, then resume what the restart interrupted.
+    for folder in sorted(DATA.iterdir(), key=lambda f: f.stat().st_mtime):
         if folder.is_dir() and re.fullmatch('[a-f0-9]{32}', folder.name):
-            files = sorted(p.name for p in folder.iterdir() if p.suffix in ('.musicxml', '.mxl'))
-            JOBS[folder.name] = {'name': stored_name(folder), 'status': 'done' if files else 'error', 'message': 'Résultats restaurés.' if files else 'Conversion interrompue. Cliquez sur « Relancer la conversion ».', 'files': files, **job_details(folder)}
+            JOBS[folder.name] = restore_job(folder)
+    resume_interrupted()
+    retention = float(os.environ.get('LOCAL_RETENTION_DAYS', '7'))
+
+    def janitor():
+        while True:
+            cleanup_published(retention)
+            time.sleep(6 * 3600)
+    threading.Thread(target=janitor, daemon=True).start()
     port = int(os.environ.get('PORT', '8765'))
     print(f'Application disponible sur http://127.0.0.1:{port}', flush=True)
     ThreadingHTTPServer(('127.0.0.1', port), Handler).serve_forever()

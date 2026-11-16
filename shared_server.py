@@ -531,14 +531,13 @@ def main():
     app.DATA = STATE / 'jobs'
     app.DATA.mkdir(parents=True, exist_ok=True)
     app.JOBS.clear()
-    for folder in app.DATA.iterdir():
+    for folder in sorted(app.DATA.iterdir(), key=lambda f: f.stat().st_mtime):
         meta = folder / 'metadata.json'
         if not app.re.fullmatch('[a-f0-9]{32}', folder.name) or not meta.is_file():
             continue
-        data = json.loads(meta.read_text())
-        files = sorted(p.name for p in folder.iterdir() if p.suffix in ('.musicxml', '.mxl'))
-        app.JOBS[folder.name] = {**data, 'name': app.stored_name(folder), 'status': 'done' if files else 'error', 'message': 'Résultats restaurés.' if files else 'Conversion interrompue.', 'files': files, **app.job_details(folder)}
+        app.JOBS[folder.name] = app.restore_job(folder, json.loads(meta.read_text()))
     cleanup()
+    app.resume_interrupted()
     def janitor():
         while True:
             time.sleep(60)
