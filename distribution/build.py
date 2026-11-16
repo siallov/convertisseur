@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Build the archive to install « Atelier partitions » on another PC.
 
-    python3 distribution/build.py        ->  dist/atelier-partitions-<version>-linux.tar.gz
+    python3 distribution/build.py   ->  dist/atelier-partitions-<version>-linux.tar.gz
+                                        dist/atelier-partitions-<version>-windows.zip
 
 The archive holds the installer and a `programme/` folder with the local
 application only (no online-service files, no data, no secrets).
@@ -9,6 +10,7 @@ application only (no online-service files, no data, no secrets).
 import io
 import sys
 import tarfile
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -60,6 +62,30 @@ def build_linux():
     return target
 
 
+def windows_text(path):
+    """Windows line endings; PowerShell 5.1 needs a UTF-8 BOM to read accents correctly."""
+    text = path.read_text(encoding='utf-8').replace('\r\n', '\n').replace('\n', '\r\n')
+    if path.suffix == '.cmd' and not text.isascii():
+        sys.exit(f'{path.name} doit rester en ASCII (cmd.exe ne lit pas l’UTF-8).')
+    return ('﻿' if path.suffix == '.ps1' else '') + text
+
+
+def build_windows():
+    DIST.mkdir(exist_ok=True)
+    top = 'atelier-partitions'
+    windows = ROOT / 'distribution' / 'windows'
+    target = DIST / f'atelier-partitions-{VERSION}-windows.zip'
+    with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED) as archive:
+        for name in ('installer.cmd', 'installer.ps1', 'LISEZMOI.txt'):
+            archive.writestr(f'{top}/{name}', windows_text(windows / name).encode('utf-8'))
+        for source in program_files():
+            archive.write(source, f'{top}/programme/{source.relative_to(ROOT).as_posix()}')
+        for name in ('desinstaller.cmd', 'desinstaller.ps1'):
+            archive.writestr(f'{top}/programme/{name}', windows_text(windows / name).encode('utf-8'))
+        archive.writestr(f'{top}/programme/VERSION', VERSION + '\r\n')
+    return target
+
+
 if __name__ == '__main__':
-    path = build_linux()
-    print(f'{path.relative_to(ROOT)}  ({path.stat().st_size // 1024} Ko)')
+    for path in (build_linux(), build_windows()):
+        print(f'{path.relative_to(ROOT)}  ({path.stat().st_size // 1024} Ko)')

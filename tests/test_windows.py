@@ -74,6 +74,26 @@ class EngineTests(unittest.TestCase):
                 self.assertTrue(os.environ['PATH'].startswith(str(Path(temp) / 'Tesseract-OCR')))
 
 
+    def test_audiveris_french_is_used_when_tesseract_lacks_it(self):
+        with tempfile.TemporaryDirectory() as temp:
+            program = Path(temp) / 'Tesseract-OCR'
+            (program / 'tessdata').mkdir(parents=True)
+            (program / 'tesseract.exe').write_bytes(b'')
+            shared = Path(temp) / 'Roaming' / 'AudiverisLtd' / 'audiveris' / 'tessdata'
+            shared.mkdir(parents=True)
+            for language in ('eng', 'fra'):
+                (shared / f'{language}.traineddata').write_bytes(b'')
+            environment = {'APPDATA': str(Path(temp) / 'Roaming'), 'PATH': 'x'}
+            with patch.object(chemins, 'WINDOWS', True), patch.object(paroles.shutil, 'which', return_value=str(program / 'tesseract.exe')), \
+                    patch.dict(os.environ, environment):
+                os.environ.pop('TESSDATA_PREFIX', None)
+                paroles.find_tesseract()
+                self.assertEqual(os.environ.get('TESSDATA_PREFIX'), str(shared))
+                (program / 'tessdata' / 'fra.traineddata').write_bytes(b'')
+                os.environ.pop('TESSDATA_PREFIX')
+                paroles.find_tesseract()  # Tesseract has French itself: nothing to change
+                self.assertNotIn('TESSDATA_PREFIX', os.environ)
+
 class FileTests(unittest.TestCase):
     @unittest.skipUnless(paroles.pymupdf, 'PyMuPDF non installé')
     def test_page_sizes_without_pdfinfo(self):

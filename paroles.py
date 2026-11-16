@@ -12,18 +12,32 @@ import shutil
 import threading
 import time
 import uuid
+from pathlib import Path
 
 import chemins
 
 
 def find_tesseract():
-    """The Windows installer does not add Tesseract to the PATH: add its usual folder."""
-    if not chemins.WINDOWS or shutil.which('tesseract'):
+    """Windows: the Tesseract installer neither adds itself to the PATH nor installs French by default.
+
+    Add its folder to the PATH, and when its own language folder lacks French, use the
+    languages installed for Audiveris (%APPDATA%\\AudiverisLtd\\audiveris\\tessdata).
+    """
+    if not chemins.WINDOWS:
         return
-    for folder in chemins.program_files():
-        if (folder / 'Tesseract-OCR' / 'tesseract.exe').is_file():
-            os.environ['PATH'] = str(folder / 'Tesseract-OCR') + os.pathsep + os.environ.get('PATH', '')
-            return
+    if not shutil.which('tesseract'):
+        for folder in chemins.program_files():
+            if (folder / 'Tesseract-OCR' / 'tesseract.exe').is_file():
+                os.environ['PATH'] = str(folder / 'Tesseract-OCR') + os.pathsep + os.environ.get('PATH', '')
+                break
+    executable = shutil.which('tesseract')
+    if not executable or os.environ.get('TESSDATA_PREFIX'):
+        return
+    own = Path(executable).parent / 'tessdata'
+    shared = Path(os.environ.get('APPDATA', '')) / 'AudiverisLtd' / 'audiveris' / 'tessdata'
+    if not (own / 'fra.traineddata').is_file() and (shared / 'fra.traineddata').is_file() \
+            and (shared / 'eng.traineddata').is_file():
+        os.environ['TESSDATA_PREFIX'] = str(shared)
 
 
 find_tesseract()

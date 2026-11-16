@@ -6,6 +6,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -39,6 +40,35 @@ class ArchiveTests(unittest.TestCase):
         self.assertIn('sha256sum -c', script)
         for path in (ROOT / 'distribution' / 'linux').glob('*.sh'):
             self.assertEqual(subprocess.run(['bash', '-n', str(path)], check=False).returncode, 0, path)
+
+    def test_windows_archive_is_ready_for_powershell(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(build, 'DIST', Path(temp)):
+            with zipfile.ZipFile(build.build_windows()) as archive:
+                names = set(archive.namelist())
+                files = {name: archive.read(name) for name in names if name.endswith(('.ps1', '.cmd', 'LISEZMOI.txt'))}
+        for name in ('installer.cmd', 'installer.ps1', 'LISEZMOI.txt', 'programme/app.py', 'programme/static/icone.ico',
+                     'programme/desinstaller.ps1', 'programme/desinstaller.cmd', 'programme/VERSION'):
+            self.assertIn('atelier-partitions/' + name, names)
+        for forbidden in ('private', 'data/', 'tests/', 'shared_server', 'sync_membres', '.sh'):
+            self.assertFalse([n for n in names if forbidden in n], forbidden)
+        for name, data in files.items():
+            self.assertNotIn(b'\n', data.replace(b'\r\n', b''), name)  # Windows line endings only
+            if name.endswith('.ps1'):
+                self.assertTrue(data.startswith(b'\xef\xbb\xbf'), name)  # UTF-8 BOM for PowerShell 5.1
+            if name.endswith('.cmd'):
+                self.assertTrue(data.isascii(), name)
+
+    def test_both_installers_pin_the_same_downloads(self):
+        linux = (ROOT / 'distribution' / 'linux' / 'installer.sh').read_text(encoding='utf-8')
+        windows = (ROOT / 'distribution' / 'windows' / 'installer.ps1').read_text(encoding='utf-8')
+        for language in ('eng', 'fra'):
+            digest = re.search(rf'^TESSDATA_SHA256_{language}=(\S+)$', linux, re.M)[1]
+            self.assertRegex(windows, rf"{language} = '{digest}'")
+        self.assertIn(re.search(r'^AUDIVERIS_VERSION=(\S+)$', linux, re.M)[1], re.search(r"^\$AudiverisVersion = '(\S+)'", windows, re.M)[1])
+        self.assertRegex(re.search(r"^\$AudiverisSha256 = '(\S+)'", windows, re.M)[1], r'^[0-9a-f]{64}$')
+        self.assertIn('Get-FileHash', windows)
+        self.assertIn('4.1.0', linux)
+        self.assertIn('4.1.0', windows)
 
 
 class LauncherTests(unittest.TestCase):

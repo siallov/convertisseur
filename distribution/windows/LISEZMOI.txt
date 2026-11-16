@@ -1,0 +1,42 @@
+ATELIER PARTITIONS — installation sous Windows
+================================================
+
+Ce que fait l'application
+  • Convertir une partition PDF en MusicXML (avec Audiveris), la vérifier et l'écouter.
+  • Extraire les paroles d'une partition (texte) et obtenir le PDF sans les paroles.
+  • Déposer les partitions dans Paheko (facultatif, quand internet est disponible).
+Tout le traitement a lieu sur le PC : l'application fonctionne sans connexion.
+
+Systèmes pris en charge
+  Windows 10 ou Windows 11, 64 bits.
+
+Installer
+  1. Clic droit sur l'archive .zip > « Extraire tout… ». Ne lancez pas l'installation
+     depuis l'intérieur du fichier .zip.
+  2. Dans le dossier extrait « atelier-partitions », double-cliquez sur installer.cmd
+  3. Si Windows affiche « Windows a protégé votre ordinateur », cliquez sur
+     « Informations complémentaires » puis « Exécuter quand même ».
+  4. Acceptez les demandes d'autorisation de Windows : elles servent à installer
+     Tesseract (lecture du texte) et Audiveris (lecture des notes) s'ils manquent.
+  Internet est nécessaire pendant l'installation (environ 300 Mo à télécharger).
+  Python est installé pour votre compte s'il manque.
+
+Utiliser
+  Double-cliquez sur l'icône « Atelier partitions » du Bureau ou du menu Démarrer.
+  L'application s'ouvre dans votre navigateur, à l'adresse http://127.0.0.1:8765
+
+Déposer dans Paheko (facultatif)
+  Dans PowerShell :
+      & "$env:LOCALAPPDATA\AtelierPartitions\programme\.venv\Scripts\python.exe" "$env:LOCALAPPDATA\AtelierPartitions\programme\setup_paheko.py"
+
+Où sont mes fichiers ?
+  Conversions et réglages : %LOCALAPPDATA%\AtelierPartitions
+  Le programme            : %LOCALAPPDATA%\AtelierPartitions\programme
+
+Mettre à jour
+  Relancez installer.cmd depuis la nouvelle archive : vos conversions et réglages sont conservés.
+
+Désinstaller
+  Paramètres > Applications > Atelier partitions > Désinstaller
+  (ou desinstaller.cmd dans le dossier du programme). Vos conversions sont conservées,
+  sauf si vous demandez leur suppression.

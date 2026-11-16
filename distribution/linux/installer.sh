@@ -13,6 +13,11 @@ AUDIVERIS_2204_SHA256=ae714594f40e54b1a4951fc3f914f08ae38fe5d07b7f2283b1a904fdb6
 AUDIVERIS_2404=Audiveris-5.11.0-ubuntu24.04-x86_64.deb
 AUDIVERIS_2404_SHA256=f20113aaa33b3149ec8d6a09b2a7963360e65fafd92d69389987a85bbc3ec7a3
 PACKAGES=(python3 python3-venv tesseract-ocr tesseract-ocr-fra)
+# Langues de lecture du texte pour Audiveris (dépôt officiel tesseract-ocr/tessdata, version 4.1.0).
+TESSDATA_BASE="https://raw.githubusercontent.com/tesseract-ocr/tessdata/4.1.0"
+TESSDATA_SHA256_eng=daa0c97d651c19fba3b25e81317cd697e9908c8208090c94c3905381c23fc047
+TESSDATA_SHA256_fra=eac01c1d72540d6090facb7b2f42dd0a2ee8fc57c5be1b20548ae668e2761913
+AUDIVERIS_TESSDATA="${XDG_CONFIG_HOME:-$HOME/.config}/AudiverisLtd/audiveris/tessdata"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE="$HERE/programme"
@@ -63,6 +68,22 @@ else
   sudo apt-get install -y "$temp/$file"
 fi
 
+# 2 bis. Français et anglais pour qu'Audiveris lise les paroles ----------------------
+mkdir -p "$AUDIVERIS_TESSDATA"
+for language in eng fra; do
+  sum_var="TESSDATA_SHA256_$language"
+  target="$AUDIVERIS_TESSDATA/$language.traineddata"
+  if [ -f "$target" ] && echo "${!sum_var}  $target" | sha256sum -c --quiet - 2>/dev/null; then
+    continue
+  fi
+  say "Téléchargement de la langue « $language » pour la lecture des paroles…"
+  part="$(mktemp "$AUDIVERIS_TESSDATA/.$language.XXXXXX")"
+  curl -fL --retry 3 -o "$part" "$TESSDATA_BASE/$language.traineddata" || { rm -f "$part"; fail "téléchargement de la langue $language impossible."; }
+  echo "${!sum_var}  $part" | sha256sum -c --quiet - || { rm -f "$part"; fail "le fichier de langue $language ne correspond pas à l'original."; }
+  chmod 644 "$part"
+  mv "$part" "$target"
+done
+
 # 3. Programme et bibliothèques Python ----------------------------------------------
 say "Installation du programme dans $PROGRAM"
 if [ -x "$PROGRAM/.venv/bin/python" ]; then
@@ -107,6 +128,11 @@ print('  Lecture des notes (Audiveris) :', 'prête' if engine else 'INTROUVABLE'
 print('  Extraction des paroles       :', 'prête' if lyrics['available'] else 'INDISPONIBLE')
 print('  Lecture du texte des scans   :', 'prête' if lyrics['french'] else 'sans le français')
 EOF
+if [ -f "$AUDIVERIS_TESSDATA/fra.traineddata" ]; then
+  echo "  Paroles lues par Audiveris   : prêtes (français)"
+else
+  echo "  Paroles lues par Audiveris   : sans le français"
+fi
 
 say "Atelier partitions est installé."
 echo "  • Ouvrez-le depuis le menu des applications (« Atelier partitions »)"

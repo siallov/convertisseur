@@ -12,7 +12,12 @@ Les données sont rangées dans `data/` et `private/` à côté du programme qua
 python3 distribution/build.py
 ```
 
-produit `dist/atelier-partitions-<version>-linux.tar.gz`. Sur le PC de destination (Ubuntu 22.04+, Debian 12+ ou dérivé, 64 bits), décompresser l’archive puis lancer `./installer.sh` : il installe au besoin Python, Tesseract et Audiveris (version fixée, empreinte vérifiée), crée l’environnement Python, la commande `atelier-partitions` et l’icône du menu. Détails pour l’utilisateur dans `distribution/linux/LISEZMOI.txt`. Le lanceur (`lanceur.py`) démarre l’application si besoin puis ouvre le navigateur ; `--arreter` l’arrête.
+produit deux archives dans `dist/` :
+
+- **Linux** (`…-linux.tar.gz`, Ubuntu 22.04+, Debian 12+ ou dérivé, 64 bits) : décompresser puis lancer `./installer.sh`. Il installe au besoin Python, Tesseract et Audiveris, crée l’environnement Python, la commande `atelier-partitions` et l’icône du menu.
+- **Windows** (`…-windows.zip`, Windows 10 ou 11, 64 bits) : « Extraire tout », puis double-cliquer sur `installer.cmd`. Il installe au besoin Python (winget, pour l’utilisateur), Tesseract (winget) et Audiveris (MSI officiel), crée les raccourcis du Bureau et du menu Démarrer et l’entrée de désinstallation dans Paramètres > Applications. **Pas encore essayé sur un vrai PC Windows.**
+
+Les deux installent aussi le français et l’anglais pour qu’Audiveris lise les paroles (dépôt officiel `tesseract-ocr/tessdata` 4.1.0). Chaque téléchargement a une version fixée et une empreinte SHA-256 vérifiée. Détails pour l’utilisateur dans `distribution/*/LISEZMOI.txt`. Le lanceur (`lanceur.py`) démarre l’application si besoin puis ouvre le navigateur ; `--arreter` l’arrête.
 
 ## Démarrage depuis les sources
 
