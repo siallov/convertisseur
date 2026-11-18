@@ -95,7 +95,8 @@ class SharedTests(unittest.TestCase):
         with self.request('/login', data=data, headers={'Content-Type':'application/json'}) as r:
             self.assertEqual(json.load(r), {'ok':True})
             cookie = r.headers['Set-Cookie']
-        for flag in ['Secure','HttpOnly','SameSite=Strict','Path=/']:
+        # Lax so that the link from Paheko keeps the session (see shared_server.login)
+        for flag in ['Secure','HttpOnly','SameSite=Lax','Path=/']:
             self.assertIn(flag, cookie)
         cookie = cookie.split(';')[0]
         with self.request('/api/jobs', headers={'Cookie':cookie}) as r:

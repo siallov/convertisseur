@@ -162,7 +162,9 @@ class SharedHandler(app.Handler):
         with self.sessions_lock:
             type(self).sessions = {k:v for k,v in self.sessions.items() if v[1] > time.time()}
             self.sessions[token] = (self.user, time.time() + 12 * 3600)
-        cookie = '__Host-omr_session=' + token + '; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=43200'
+        # Lax, not Strict: the browser must send the session when following the « Ouvrir le convertisseur »
+        # link from Paheko (another site). Cross-site POSTs still carry no cookie, and every POST checks Origin.
+        cookie = '__Host-omr_session=' + token + '; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=43200'
         if native:
             return self.native_redirect('/', cookie)
         self.send_response(200)
@@ -185,7 +187,7 @@ class SharedHandler(app.Handler):
             with self.sessions_lock:
                 self.sessions.pop(token.value, None)
         # Expired at once: the browser drops it even if the session was already unknown here.
-        return self.native_redirect('/', '__Host-omr_session=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0')
+        return self.native_redirect('/', '__Host-omr_session=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0')
 
     def native_redirect(self, location, cookie=None):
         self.send_response(303)
