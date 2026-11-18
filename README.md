@@ -61,6 +61,16 @@ Les tests emploient un moteur simulé pour vérifier l’intégration et les err
 
 Les installations Linux dans `/opt/audiveris/bin/Audiveris` sont détectées automatiquement. Si `pdfinfo` (Poppler) est disponible, la résolution des PDF de grandes dimensions est réduite automatiquement pour rester sous la limite de pixels d’Audiveris. Le PDF original reste intact. Le moteur Java est lancé sans interface graphique.
 
+## Format liseuse (PocketBook / Vivlio InkPad 3)
+
+L’onglet « Format liseuse » (`/liseuse`) produit une copie du PDF au format de l’écran de l’InkPad 3 : pages de 118,9 × 158,5 mm (1404 × 1872 pixels à 300 ppp). Les marges blanches sont retirées et chaque système (portées et paroles ensemble) est replacé sur les pages, dans l’ordre, sans jamais être coupé entre deux pages. Les numéros de page et petits titres courants répétés sont retirés. Les PDF numériques restent vectoriels ; les scans gardent leur image d’origine.
+
+En ligne de commande : `python3 liseuse.py partition.pdf [sortie.pdf]` (par défaut `partition_liseuse.pdf`).
+
+Besoins : PyMuPDF et numpy, déjà dans `requirements-paroles.txt` ; SciPy pour reconnaître les systèmes. Sans SciPy, la page est découpée sur les grands espaces blancs seulement, et un système peut alors être séparé de ses paroles. Les portées d’un même système sont reconnues au trait vertical (ou à l’accolade) qui les relie à gauche ; à défaut, à l’alignement des barres de mesure. Vérifiez l’aperçu avant de copier le fichier sur la liseuse.
+
+Sur la liseuse, réglez le rafraîchissement complet de l’écran sur « Jamais » (ou un long intervalle) pour éviter le flash noir à chaque page.
+
 ## Partage avec la chorale
 
 Mise en ligne sécurisée, dépôt automatique dans Paheko et comptes des choristes : voir `PARTAGE.md` et `paheko/INSTALLATION.md`.

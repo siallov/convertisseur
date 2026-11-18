@@ -19,7 +19,7 @@ VERSION = (ROOT / 'distribution' / 'VERSION').read_text(encoding='utf-8').strip(
 
 # Local application: conversion, review, Paheko deposit and lyrics.
 PROGRAM = ['app.py', 'chemins.py', 'lanceur.py', 'installation_config.py', 'paheko_upload.py', 'pupitres.py',
-           'paroles.py', 'paroles_core.py', 'paroles_scan.py', 'setup_paheko.py', 'requirements-paroles.txt']
+           'paroles.py', 'paroles_core.py', 'paroles_scan.py', 'liseuse.py', 'setup_paheko.py', 'requirements-paroles.txt']
 EXCLUDED = ('__pycache__', '.pyc')
 
 

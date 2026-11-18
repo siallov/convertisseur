@@ -24,6 +24,11 @@ import paheko_upload
 import paroles
 import pupitres
 
+try:
+    import liseuse
+except ImportError:  # PyMuPDF ou numpy absents : l’onglet le signale
+    liseuse = None
+
 ROOT = chemins.ROOT
 DATA = chemins.DATA
 MAX_BYTES = 80 * 1024 * 1024
@@ -559,7 +564,10 @@ ASSETS = {
     '/paroles': ('paroles.html', 'text/html; charset=utf-8'),
     '/icone.svg': ('icone.svg', 'image/svg+xml'),
     '/paroles.js': ('paroles.js', 'text/javascript; charset=utf-8'),
+    '/liseuse': ('liseuse.html', 'text/html; charset=utf-8'),
+    '/liseuse.js': ('liseuse.js', 'text/javascript; charset=utf-8'),
 }
+LISEUSE_LOCK = threading.Semaphore(1)  # une mise en page à la fois : elle charge tout le PDF en mémoire
 PAROLES_PATH = re.compile(r'/api/paroles/([a-f0-9]{32})(?:/(page|apercu)/(\d{1,4})|/(calcul|pdf))?')
 FILE_TYPES = {
     '.pdf': 'application/pdf',
@@ -670,8 +678,44 @@ class Handler(BaseHTTPRequestHandler):
             self.json_response(400, {'error': message})
         return True
 
+    def liseuse_request(self, post):
+        """Routes of the « Format liseuse » tab. Returns True when the request was handled."""
+        path = urlparse(self.path).path
+        if path == '/api/liseuse/statut' and not post:
+            self.json_response(200, {'available': liseuse is not None,
+                                     'systems': liseuse is not None and liseuse._find_staves is not None})
+            return True
+        if path != '/api/liseuse' or not post:
+            return False
+        if liseuse is None:
+            self.json_response(503, {'error': 'La mise en page pour liseuse n’est pas installée sur cet ordinateur.'})
+            return True
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+        except ValueError:
+            length = 0
+        if not 0 < length <= MAX_BYTES:
+            self.json_response(413, {'error': 'Sélectionnez un PDF de moins de 80 Mo.'})
+            return True
+        content = self.rfile.read(length)
+        if len(content) != length or not content.startswith(b'%PDF-'):
+            self.json_response(400, {'error': 'Ce fichier n’est pas un PDF valide.'})
+            return True
+        name = unquote(self.headers.get('X-Filename', 'partition.pdf'))[:200]
+        with LISEUSE_LOCK:
+            try:
+                body, info = liseuse.convert(content)
+            except (ValueError, RuntimeError) as error:
+                message = str(error) if isinstance(error, ValueError) else 'Impossible de lire ce PDF.'
+                self.json_response(400, {'error': message})
+                return True
+        stem = re.sub(r'\.pdf$', '', name, flags=re.IGNORECASE) or 'partition'
+        self.bytes_response(body, 'application/pdf', f'{stem}_liseuse.pdf',
+                            {'X-Pages': str(info['pages']), 'X-Systems': str(info['systems'])})
+        return True
+
     def do_GET(self):
-        if self.paroles_request(post=False):
+        if self.paroles_request(post=False) or self.liseuse_request(post=False):
             return
         path = urlparse(self.path).path
         if path == '/api/config':
@@ -715,7 +759,7 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get('Origin')
         if origin and origin != f'http://{self.headers.get("Host")}':
             return self.json_response(403, {'error': 'Origine refusée.'})
-        if self.paroles_request(post=True):
+        if self.paroles_request(post=True) or self.liseuse_request(post=True):
             return
         naming_match = re.fullmatch(r'/api/jobs/([a-f0-9]{32})/pupitres', urlparse(self.path).path)
         if naming_match:
