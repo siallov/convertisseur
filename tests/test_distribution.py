@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -46,8 +47,8 @@ class ArchiveTests(unittest.TestCase):
             with zipfile.ZipFile(build.build_windows()) as archive:
                 names = set(archive.namelist())
                 files = {name: archive.read(name) for name in names if name.endswith(('.ps1', '.cmd', 'LISEZMOI.txt'))}
-        for name in ('installer.cmd', 'installer.ps1', 'LISEZMOI.txt', 'programme/app.py', 'programme/static/icone.ico',
-                     'programme/desinstaller.ps1', 'programme/desinstaller.cmd', 'programme/VERSION'):
+        for name in ('installer.cmd', 'installer.ps1', 'installer-fenetre.ps1', 'LISEZMOI.txt', 'programme/app.py', 'programme/static/icone.ico',
+                     'programme/desinstaller.ps1', 'programme/desinstaller.cmd', 'programme/Atelier partitions.cmd', 'programme/VERSION'):
             self.assertIn('atelier-partitions/' + name, names)
         for forbidden in ('private', 'data/', 'tests/', 'shared_server', 'sync_membres', '.sh'):
             self.assertFalse([n for n in names if forbidden in n], forbidden)
@@ -55,8 +56,23 @@ class ArchiveTests(unittest.TestCase):
             self.assertNotIn(b'\n', data.replace(b'\r\n', b''), name)  # Windows line endings only
             if name.endswith('.ps1'):
                 self.assertTrue(data.startswith(b'\xef\xbb\xbf'), name)  # UTF-8 BOM for PowerShell 5.1
+                # PowerShell reads typographic quotes as real quotes: l’icône would end a '...' string.
+                self.assertFalse(set(data.decode('utf-8')) & set('\u2018\u2019\u201a\u201b\u201c\u201d\u201e'), name)
             if name.endswith('.cmd'):
                 self.assertTrue(data.isascii(), name)
+
+    @unittest.skipUnless(os.environ.get('PWSH') or shutil.which('pwsh'), 'PowerShell absent (PWSH=/chemin/vers/pwsh)')
+    def test_powershell_scripts_parse(self):
+        pwsh = os.environ.get('PWSH') or shutil.which('pwsh')
+        check = ("$bad = 0; foreach ($f in $args) { $t = $null; $e = $null; "
+                 "[System.Management.Automation.Language.Parser]::ParseFile($f, [ref]$t, [ref]$e) | Out-Null; "
+                 "foreach ($x in $e) { $bad++; Write-Output ($f + ':' + $x.Extent.StartLineNumber + ': ' + $x.Message) } }; exit $bad")
+        scripts = sorted(str(p) for p in (ROOT / 'distribution' / 'windows').glob('*.ps1'))
+        with tempfile.TemporaryDirectory() as temp:
+            checker = Path(temp) / 'analyse.ps1'
+            checker.write_text(check, encoding='utf-8')
+            result = subprocess.run([pwsh, '-NoProfile', '-File', str(checker), *scripts], capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_both_installers_pin_the_same_downloads(self):
         linux = (ROOT / 'distribution' / 'linux' / 'installer.sh').read_text(encoding='utf-8')

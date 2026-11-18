@@ -76,11 +76,11 @@ def build_windows():
     windows = ROOT / 'distribution' / 'windows'
     target = DIST / f'atelier-partitions-{VERSION}-windows.zip'
     with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED) as archive:
-        for name in ('installer.cmd', 'installer.ps1', 'LISEZMOI.txt'):
+        for name in ('installer.cmd', 'installer.ps1', 'installer-fenetre.ps1', 'LISEZMOI.txt'):
             archive.writestr(f'{top}/{name}', windows_text(windows / name).encode('utf-8'))
         for source in program_files():
             archive.write(source, f'{top}/programme/{source.relative_to(ROOT).as_posix()}')
-        for name in ('desinstaller.cmd', 'desinstaller.ps1'):
+        for name in ('desinstaller.cmd', 'desinstaller.ps1', 'Atelier partitions.cmd'):
             archive.writestr(f'{top}/programme/{name}', windows_text(windows / name).encode('utf-8'))
         archive.writestr(f'{top}/programme/VERSION', VERSION + '\r\n')
     return target
