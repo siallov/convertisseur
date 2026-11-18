@@ -162,7 +162,7 @@ try {
 & $Python -m venv (Join-Path $Program '.venv') 2>&1 | Out-Host
 if ($LASTEXITCODE -ne 0) { Fail "création de l'environnement Python impossible." }
 Step 6 'Bibliothèques Python'
-Info 'Téléchargement de PyMuPDF, numpy, SciPy et Pillow : cela peut prendre quelques minutes…'
+Info 'Téléchargement de PyMuPDF, numpy, SciPy, Pillow et Verovio : cela peut prendre quelques minutes…'
 & $venvPython -m pip install --disable-pip-version-check --quiet -r (Join-Path $Program 'requirements-paroles.txt') 2>&1 | Out-Host
 if ($LASTEXITCODE -ne 0) { Fail 'installation des bibliothèques Python impossible. Vérifiez la connexion internet.' }
 

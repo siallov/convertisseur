@@ -2,7 +2,7 @@
 
 Application locale en français. Import PDF par glisser-déposer, aperçu, file de conversion, journal et téléchargement `.musicxml` et `.mxl`. Un onglet « Extraire les paroles » récupère le texte d’une partition et produit le PDF sans paroles. Les documents restent sur votre ordinateur. Les polices Google sont optionnelles et remplacées automatiquement par une police système sans connexion.
 
-La conversion n’utilise que la bibliothèque standard de Python. L’onglet « Paroles » a besoin de `requirements-paroles.txt` (PyMuPDF, numpy, SciPy, Pillow) ; sans ces bibliothèques, il l’indique et le reste fonctionne.
+La conversion n’utilise que la bibliothèque standard de Python. L’onglet « Paroles » a besoin de `requirements-paroles.txt` (PyMuPDF, numpy, SciPy, Pillow ; Verovio pour graver les MusicXML au format liseuse) ; sans ces bibliothèques, il l’indique et le reste fonctionne.
 
 Les données sont rangées dans `data/` et `private/` à côté du programme quand ces dossiers existent (installations existantes), sinon dans le profil : `~/.local/share/atelier-partitions` (Linux) ou `%LOCALAPPDATA%\AtelierPartitions` (Windows). `PARTITIONS_HOME` choisit un autre dossier.
 
@@ -63,13 +63,20 @@ Les installations Linux dans `/opt/audiveris/bin/Audiveris` sont détectées aut
 
 ## Format liseuse (PocketBook / Vivlio InkPad 3)
 
-L’onglet « Format liseuse » (`/liseuse`) produit une copie du PDF au format de l’écran de l’InkPad 3 : pages de 118,9 × 158,5 mm (1404 × 1872 pixels à 300 ppp). Les marges blanches sont retirées et chaque système (portées et paroles ensemble) est replacé sur les pages, dans l’ordre, sans jamais être coupé entre deux pages. Les numéros de page et petits titres courants répétés sont retirés. Les PDF numériques restent vectoriels ; les scans gardent leur image d’origine.
+L’onglet « Format liseuse » (`/liseuse`) produit une copie de la partition au format de l’écran de l’InkPad 3 : pages de 118,9 × 158,5 mm (1404 × 1872 pixels à 300 ppp). Il accepte deux sortes de fichiers :
 
-En ligne de commande : `python3 liseuse.py partition.pdf [sortie.pdf]` (par défaut `partition_liseuse.pdf`).
+- **un PDF** : les marges blanches sont retirées et chaque système (portées et paroles ensemble) est replacé sur les pages, dans l’ordre, sans jamais être coupé entre deux pages. Les numéros de page et petits titres courants répétés sont retirés. Les PDF numériques restent vectoriels ; les scans gardent leur image d’origine. Les portées d’un même système sont reconnues au trait vertical (ou à l’accolade) qui les relie à gauche ; à défaut, à l’alignement des barres de mesure ;
+- **un MusicXML** (`.musicxml`, `.xml`, ou `.mxl` compressé, par exemple exporté de MuseScore) : la partition est entièrement regravée à la taille de l’écran par [Verovio](https://www.verovio.org), en trois tailles de notes : grande (portée de 7,2 mm, comme sur papier), moyenne (par défaut) ou petite (plus de mesures par page). Le résultat reste vectoriel. Les notes des indications de tempo sont écrites en toutes lettres (« noire = 100 ») : les polices de texte n’ont pas le caractère ♩.
 
-Besoins : PyMuPDF et numpy, déjà dans `requirements-paroles.txt` ; SciPy pour reconnaître les systèmes. Sans SciPy, la page est découpée sur les grands espaces blancs seulement, et un système peut alors être séparé de ses paroles. Les portées d’un même système sont reconnues au trait vertical (ou à l’accolade) qui les relie à gauche ; à défaut, à l’alignement des barres de mesure. Vérifiez l’aperçu avant de copier le fichier sur la liseuse.
+En ligne de commande : `python3 liseuse.py partition.pdf|partition.musicxml [sortie.pdf] [--taille grande|moyenne|petite]` (par défaut `partition_liseuse.pdf`, taille moyenne).
+
+Besoins : PyMuPDF et numpy, dans `requirements-paroles.txt` ; SciPy pour reconnaître les systèmes des PDF (sans lui, la page est découpée sur les grands espaces blancs seulement, et un système peut alors être séparé de ses paroles) ; Verovio pour les MusicXML. Vérifiez l’aperçu avant de copier le fichier sur la liseuse.
 
 Sur la liseuse, réglez le rafraîchissement complet de l’écran sur « Jamais » (ou un long intervalle) pour éviter le flash noir à chaque page.
+
+## Importer un MusicXML déjà prêt
+
+Dans « Convertir une partition », un fichier MusicXML (`.musicxml`, `.xml` ou `.mxl`, par exemple exporté de MuseScore) peut être déposé à la place d’un PDF. Il ne passe pas par Audiveris : il rejoint directement les conversions « à vérifier », avec son titre, son compositeur et son pupitre. On l’écoute, on nomme ses pupitres et on le dépose dans Paheko comme une reconnaissance terminée. Le dépôt contient alors le MusicXML et le MXL, sans PDF d’origine. L’import fonctionne même si Audiveris est absent.
 
 ## Partage avec la chorale
 

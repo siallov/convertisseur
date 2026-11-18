@@ -131,5 +131,59 @@ class ReaderRouteTests(unittest.TestCase):
         error.exception.close()
 
 
+
+@unittest.skipUnless(liseuse is not None and liseuse.verovio is not None, 'verovio non installé')
+class MusicXMLEngravingTests(unittest.TestCase):
+    def test_engraves_for_the_screen_with_lyrics_and_tempo(self):
+        from test_import_musicxml import SCORE, compressed
+        for data in (SCORE.encode(), compressed(SCORE)):
+            body, info = liseuse.convert_any(data, 'moyenne')
+            self.assertTrue(info['engraved'])
+            with pymupdf.open(stream=body, filetype='pdf') as doc:
+                self.assertEqual(info['pages'], len(doc))
+                page = doc[0]
+                self.assertAlmostEqual(page.rect.width, 336.96, places=1)
+                text = page.get_text().replace('\xa0', ' ')
+                # the tempo note is spelled out: the text fonts have no ♩
+                self.assertIn('noire = 100', text)
+                for word in ('Le', 'duc', 'Bordeaux'):
+                    self.assertIn(word, text)
+                drawings = page.get_drawings()
+                # staff lines are drawn (Verovio styles them with CSS that MuPDF ignores)
+                self.assertTrue([d for d in drawings if d['rect'].width > 50 and d['rect'].height < 2])
+                # Verovio's hidden placeholders must not appear as dots in the margin
+                self.assertFalse([d for d in drawings if d['rect'].x1 < 20 and d['rect'].width < 6])
+
+    def test_note_size_changes_the_layout(self):
+        from test_import_musicxml import SCORE
+        long_score = SCORE.replace('</part>', ''.join(
+            f'<measure number="{n}"><note><pitch><step>G</step><octave>2</octave></pitch><duration>4</duration>'
+            '<type>whole</type></note></measure>' for n in range(3, 160)) + '</part>')
+        pages = {size: liseuse.convert_musicxml(long_score.encode(), size)[1]['pages'] for size in liseuse.SIZES}
+        self.assertGreater(pages['grande'], pages['moyenne'])
+        self.assertGreater(pages['moyenne'], pages['petite'])
+        with self.assertRaises(ValueError):
+            liseuse.convert_musicxml(SCORE.encode(), 'immense')
+
+    def test_route_accepts_musicxml_and_checks_the_size(self):
+        from test_import_musicxml import SCORE
+        server = app.ThreadingHTTPServer(('127.0.0.1', 0), app.Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        base = f'http://127.0.0.1:{server.server_port}/api/liseuse'
+        try:
+            request = Request(base, data=SCORE.encode(), headers={'X-Filename': 'duc.musicxml', 'X-Note-Size': 'petite'})
+            with urlopen(request) as response:
+                self.assertEqual(response.headers['X-Engraved'], '1')
+                self.assertIn('duc_liseuse.pdf', response.headers['Content-Disposition'])
+                self.assertTrue(response.read().startswith(b'%PDF-'))
+            with self.assertRaises(HTTPError) as error:
+                urlopen(Request(base, data=SCORE.encode(), headers={'X-Note-Size': 'immense'}))
+            self.assertEqual(error.exception.code, 400)
+            error.exception.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+
+
 if __name__ == '__main__':
     unittest.main()

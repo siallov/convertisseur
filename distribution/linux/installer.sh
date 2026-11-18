@@ -93,7 +93,7 @@ rm -rf "$PROGRAM"
 mkdir -p "$DEST"
 cp -r "$SOURCE" "$PROGRAM"
 python3 -m venv "$PROGRAM/.venv"
-say "Installation des bibliothèques Python (PyMuPDF, numpy, SciPy, Pillow)…"
+say "Installation des bibliothèques Python (PyMuPDF, numpy, SciPy, Pillow, Verovio)…"
 "$PROGRAM/.venv/bin/python" -m pip install --disable-pip-version-check --quiet -r "$PROGRAM/requirements-paroles.txt" \
   || fail "installation des bibliothèques Python impossible. Vérifiez la connexion internet."
 

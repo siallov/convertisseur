@@ -322,7 +322,7 @@ async function start(){
  $('#state').textContent=job.message;
  const files=(job.files||[]).filter(f=>/^partition-[0-9]+\.musicxml$/.test(f));
  if(!files.length)throw Error('La reconnaissance n’est pas terminée. Revenez à la liste des conversions.');
- for(const f of files){const o=document.createElement('option');o.value=f;o.textContent=files.length===1?'Partition reconnue':f;$('#movement').append(o);}
+ for(const f of files){const o=document.createElement('option');o.value=f;o.textContent=files.length===1?(currentJob.imported?'Partition importée':'Partition reconnue'):f;$('#movement').append(o);}
  $('#movement').onchange=()=>display($('#movement').value);
  $('#confirm').onchange=()=>{$('#publish').disabled=!$('#confirm').checked||!canPublish();};
  $('#publish').onclick=async()=>{if(!$('#confirm').checked)return;$('#publish').disabled=true;try{await api('/api/jobs/'+id+'/publish',{method:'POST'});$('#state').textContent='Dépôt en cours…';await poll();}catch(e){$('#state').textContent=e.message;$('#publish').disabled=false;}};
@@ -335,11 +335,11 @@ function canPublish(){return !nameDirty&&!nameSaving&&(currentJob.status==='revi
 async function display(file){
  const generation=++displayGeneration;nameDirty=false;nameSaving=false;notationView=null;cursorBeat=-1;
  $('#confirm').checked=false;$('#publish').disabled=true;
- halt();$('#notation').replaceChildren();$('#render-state').textContent='Affichage de la partition reconnue…';
- const key='partition';groups[key]={title:currentJob.title||currentJob.name,pdf:'/api/jobs/'+id+'/source.pdf',musicxml:'/api/jobs/'+id+'/'+file+'?v='+Date.now()};
+ halt();$('#notation').replaceChildren();if(currentJob.imported&&$('#compare-hint'))$('#compare-hint').textContent='MusicXML importé sans reconnaissance : écoutez-le pour vérifier qu’il s’agit de la bonne version. L’écoute est synthétique ; reprises et nuances ne sont pas jouées. Vous pouvez corriger l’affectation aux pupitres ; les notes et les rythmes restent inchangés.';$('#render-state').textContent='Affichage de la partition reconnue…';
+ const key='partition';groups[key]={title:currentJob.title||currentJob.name,pdf:currentJob.imported?null:'/api/jobs/'+id+'/source.pdf',musicxml:'/api/jobs/'+id+'/'+file+'?v='+Date.now()};
  showScore(key);
  loadPupitres(file,generation);
- try{const r=await fetch(groups[key].musicxml,{cache:'no-store'});if(!r.ok)throw Error();const xml=await r.text();if(generation!==displayGeneration)return;const osmd=new opensheetmusicdisplay.OpenSheetMusicDisplay('notation',{autoResize:true,backend:'svg',drawTitle:true,followCursor:false});await osmd.load(xml.trimStart().startsWith('<?xml')?xml:'<?xml version="1.0" encoding="utf-8"?>\n'+xml);if(generation!==displayGeneration)return;osmd.render();notationView=osmd;osmd.cursor.show();$('#render-state').textContent='Partition issue de la reconnaissance. Le curseur suit le son synthétique ; reprises et nuances ne sont pas jouées.';syncCursor(0);}
+ try{const r=await fetch(groups[key].musicxml,{cache:'no-store'});if(!r.ok)throw Error();const xml=await r.text();if(generation!==displayGeneration)return;const osmd=new opensheetmusicdisplay.OpenSheetMusicDisplay('notation',{autoResize:true,backend:'svg',drawTitle:true,followCursor:false});await osmd.load(xml.trimStart().startsWith('<?xml')?xml:'<?xml version="1.0" encoding="utf-8"?>\n'+xml);if(generation!==displayGeneration)return;osmd.render();notationView=osmd;osmd.cursor.show();$('#render-state').textContent=(currentJob.imported?'MusicXML importé tel quel, sans reconnaissance.':'Partition issue de la reconnaissance.')+' Le curseur suit le son synthétique ; reprises et nuances ne sont pas jouées.';syncCursor(0);}
  catch(e){console.warn('Affichage de partition :',e);if(generation===displayGeneration)$('#render-state').textContent='L’affichage de cette partition a échoué. Téléchargez le MusicXML et vérifiez-le dans votre éditeur avant tout dépôt.';}
 }
 async function loadPupitres(file,generation){

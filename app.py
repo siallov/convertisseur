@@ -86,6 +86,7 @@ def extract_musicxml(source, destination):
         destination.write_bytes(content)
 
 
+SOURCE_SUFFIX = r'\.(pdf|musicxml|mxl|xml)$'
 PARTS = ('Ensemble', 'Soprano', 'Alto', 'Ténor', 'Baryton', 'Basse', 'Autre')
 
 
@@ -111,7 +112,7 @@ def job_details(folder):
 
 
 def score_stem(job):
-    title = job.get('title') or re.sub(r'\.pdf$', '', job.get('name', ''), flags=re.IGNORECASE)
+    title = job.get('title') or re.sub(SOURCE_SUFFIX, '', job.get('name', ''), flags=re.IGNORECASE)
     if job.get('title'):
         title = ' — '.join(x for x in (title, job.get('composer'), job.get('part') if job.get('part') != 'Ensemble' else '') if x)
     return re.sub(r'[\x00-\x1f/\\:*?"<>|]', '_', title).strip(' .')[:170]
@@ -307,6 +308,53 @@ def write_identity(path, title, composer):
     tree.write(path, encoding='utf-8', xml_declaration=True)
 
 
+def write_mxl(xml, target):
+    """Compressed copy of a MusicXML file, as Audiveris exports it."""
+    container = ('<?xml version="1.0" encoding="UTF-8"?>\n<container><rootfiles>'
+                 f'<rootfile full-path="{xml.name}" media-type="application/vnd.recordare.musicxml+xml"/>'
+                 '</rootfiles></container>\n')
+    with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(zipfile.ZipInfo('mimetype'), 'application/vnd.recordare.musicxml')
+        archive.writestr('META-INF/container.xml', container)
+        archive.write(xml, xml.name)
+
+
+def read_musicxml(content, destination):
+    """Store an uploaded MusicXML (.musicxml/.xml, or compressed .mxl) after checking it is a score."""
+    if content.startswith(b'PK\x03\x04'):
+        archive = destination.with_suffix('.upload.mxl')
+        archive.write_bytes(content)
+        try:
+            extract_musicxml(archive, destination)
+        except (zipfile.BadZipFile, KeyError, ET.ParseError) as error:
+            raise ValueError('Archive MXL illisible.') from error
+        finally:
+            archive.unlink(missing_ok=True)
+        return
+    try:
+        root = ET.fromstring(content)
+    except ET.ParseError as error:
+        raise ValueError('Ce fichier n’est pas un MusicXML lisible.') from error
+    if root.tag.split('}')[-1] not in ('score-partwise', 'score-timewise'):
+        raise ValueError('Ce fichier n’est pas un MusicXML.')
+    destination.write_bytes(content)
+
+
+def import_musicxml(job_id, content):
+    """A MusicXML that is already correct (MuseScore export…) skips recognition and goes straight to review."""
+    folder = DATA / job_id
+    xml = folder / 'partition-1.musicxml'
+    read_musicxml(content, xml)
+    with LOCK:
+        job = dict(JOBS[job_id])
+    if job.get('title') or job.get('composer'):
+        write_identity(xml, job.get('title'), job.get('composer'))
+    write_mxl(xml, folder / 'partition-1.mxl')
+    update(job_id, status='review', imported=True, files=['partition-1.mxl', 'partition-1.musicxml'], upload='pending',
+           reader_links=[], message='MusicXML importé sans reconnaissance. Vérifiez la partition et écoutez-la avant de la déposer dans Paheko.',
+           action='Ouvrez « Vérifier et écouter », puis validez le dépôt.')
+
+
 def convert(job_id, command):
     folder = DATA / job_id
     update(job_id, status='running', message='Reconnaissance de la partition en cours…', started=time.time())
@@ -358,7 +406,8 @@ def publish_job(job_id):
     try:
         payload = [(download_name(job, name), folder / name) for name in job['files']]
         stem = score_stem(job) or 'partition'
-        payload.append((stem + '.pdf', folder / 'source.pdf'))
+        if (folder / 'source.pdf').is_file():  # an imported MusicXML has no PDF
+            payload.append((stem + '.pdf', folder / 'source.pdf'))
         metadata = folder / 'classification.json'
         classification = {k: job.get(k, '') for k in ('title', 'composer', 'part', 'song_id')}
         if job.get('owner'):
@@ -683,7 +732,8 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == '/api/liseuse/statut' and not post:
             self.json_response(200, {'available': liseuse is not None,
-                                     'systems': liseuse is not None and liseuse._find_staves is not None})
+                                     'systems': liseuse is not None and liseuse._find_staves is not None,
+                                     'musicxml': liseuse is not None and liseuse.verovio is not None})
             return True
         if path != '/api/liseuse' or not post:
             return False
@@ -695,24 +745,65 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             length = 0
         if not 0 < length <= MAX_BYTES:
-            self.json_response(413, {'error': 'Sélectionnez un PDF de moins de 80 Mo.'})
+            self.json_response(413, {'error': 'Sélectionnez un fichier de moins de 80 Mo.'})
             return True
         content = self.rfile.read(length)
-        if len(content) != length or not content.startswith(b'%PDF-'):
-            self.json_response(400, {'error': 'Ce fichier n’est pas un PDF valide.'})
+        kind = liseuse.kind(content) if len(content) == length else None
+        if kind is None:
+            self.json_response(400, {'error': 'Choisissez un PDF ou un MusicXML (.musicxml, .xml, .mxl).'})
+            return True
+        if kind != 'pdf' and liseuse.verovio is None:
+            self.json_response(503, {'error': 'La gravure des MusicXML n’est pas installée sur cet ordinateur (bibliothèque verovio).'})
+            return True
+        size = self.headers.get('X-Note-Size', 'moyenne')
+        if size not in liseuse.SIZES:
+            self.json_response(400, {'error': 'Taille de notes inconnue.'})
             return True
         name = unquote(self.headers.get('X-Filename', 'partition.pdf'))[:200]
         with LISEUSE_LOCK:
             try:
-                body, info = liseuse.convert(content)
+                body, info = liseuse.convert_any(content, size)
             except (ValueError, RuntimeError) as error:
-                message = str(error) if isinstance(error, ValueError) else 'Impossible de lire ce PDF.'
+                message = str(error) if isinstance(error, ValueError) else 'Impossible de lire ce fichier.'
                 self.json_response(400, {'error': message})
                 return True
-        stem = re.sub(r'\.pdf$', '', name, flags=re.IGNORECASE) or 'partition'
+        stem = re.sub(SOURCE_SUFFIX, '', name, flags=re.IGNORECASE) or 'partition'
         self.bytes_response(body, 'application/pdf', f'{stem}_liseuse.pdf',
-                            {'X-Pages': str(info['pages']), 'X-Systems': str(info['systems'])})
+                            {'X-Pages': str(info['pages']), 'X-Systems': str(info['systems']),
+                             'X-Engraved': '1' if info.get('engraved') else '0'})
         return True
+
+    def import_request(self):
+        """POST /api/jobs/musicxml: a MusicXML file joins the conversions, ready for review."""
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+        except ValueError:
+            length = 0
+        if not 0 < length <= MAX_BYTES:
+            return self.json_response(413, {'error': 'Sélectionnez un MusicXML de moins de 80 Mo.'})
+        content = self.rfile.read(length)
+        if len(content) != length:
+            return self.json_response(400, {'error': 'Envoi incomplet. Réessayez.'})
+        try:
+            details = score_metadata(self.headers)
+        except ValueError as exc:
+            return self.json_response(400, {'error': str(exc)})
+        job_id = uuid.uuid4().hex
+        folder = DATA / job_id
+        folder.mkdir(parents=True)
+        name = unquote(self.headers.get('X-Filename', 'partition.musicxml'))[:200]
+        with LOCK:
+            JOBS[job_id] = {'name': name, 'status': 'queued', 'message': 'Lecture du MusicXML…', 'files': [], **details}
+        try:
+            import_musicxml(job_id, content)
+        except ValueError as exc:
+            with LOCK:
+                del JOBS[job_id]
+            shutil.rmtree(folder, ignore_errors=True)
+            return self.json_response(400, {'error': str(exc)})
+        (folder / 'score.json').write_text(json.dumps(details, ensure_ascii=False), encoding='utf-8')
+        (folder / 'name.txt').write_text(name, encoding='utf-8')
+        return self.json_response(202, {'id': job_id})
 
     def do_GET(self):
         if self.paroles_request(post=False) or self.liseuse_request(post=False):
@@ -800,6 +891,8 @@ class Handler(BaseHTTPRequestHandler):
             job_id, operation = manage_match.groups()
             code, value = retry_job(job_id) if operation == 'retry' else delete_job(job_id)
             return self.json_response(code, value)
+        if self.path == '/api/jobs/musicxml':
+            return self.import_request()
         if self.path != '/api/jobs':
             return self.json_response(404, {'error': 'Page introuvable.'})
         command = engine_command()
