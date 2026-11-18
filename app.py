@@ -615,6 +615,7 @@ ASSETS = {
     '/paroles.js': ('paroles.js', 'text/javascript; charset=utf-8'),
     '/liseuse': ('liseuse.html', 'text/html; charset=utf-8'),
     '/liseuse.js': ('liseuse.js', 'text/javascript; charset=utf-8'),
+    '/session.js': ('session.js', 'text/javascript; charset=utf-8'),
 }
 LISEUSE_LOCK = threading.Semaphore(1)  # une mise en page à la fois : elle charge tout le PDF en mémoire
 PAROLES_PATH = re.compile(r'/api/paroles/([a-f0-9]{32})(?:/(page|apercu)/(\d{1,4})|/(calcul|pdf))?')

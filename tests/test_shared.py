@@ -110,6 +110,39 @@ class SharedTests(unittest.TestCase):
         self.assertEqual(e.exception.code,403)
         e.exception.close()
 
+    def test_logout_ends_the_session_and_clears_the_cookie(self):
+        import http.client
+        data = json.dumps({'username':'alice','password':'test-password-123'}).encode()
+        with self.request('/login', data=data, headers={'Content-Type':'application/json'}) as r:
+            cookie = r.headers['Set-Cookie'].split(';')[0]
+        with self.request('/api/me', headers={'Cookie':cookie}) as r:
+            self.assertEqual(r.status, 200)
+
+        def logout(headers):
+            connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port)
+            connection.request('POST', '/deconnexion', b'', headers)
+            response = connection.getresponse()
+            response.read()
+            connection.close()
+            return response
+        refused = logout({'Cookie':cookie, 'Origin':'https://attacker.example'})
+        self.assertEqual(refused.status, 403)
+        with self.request('/api/me', headers={'Cookie':cookie}) as r:  # a foreign page cannot log you out
+            self.assertEqual(r.status, 200)
+        done = logout({'Cookie':cookie})
+        self.assertEqual((done.status, done.getheader('Location')), (303, '/'))
+        self.assertIn('Max-Age=0', done.getheader('Set-Cookie'))
+        self.assertTrue(done.getheader('Set-Cookie').startswith('__Host-omr_session=;'))
+        # the old cookie no longer opens anything, even if the browser kept it
+        with self.assertRaises(HTTPError) as e:
+            self.request('/api/jobs', headers={'Cookie':cookie})
+        self.assertEqual(e.exception.code, 401)
+        e.exception.close()
+        # without a session (already logged out, expired), logging out still answers
+        self.assertEqual(logout({}).status, 303)
+        with self.request('/session.js', 'alice') as r:
+            self.assertIn(b'/deconnexion', r.read())
+
     def test_admin_dashboard_is_restricted_and_minimal(self):
         config=self.root/'administrators.json';config.write_text('["alice"]')
         with patch.object(shared,'ADMINS',config):

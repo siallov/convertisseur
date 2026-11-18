@@ -172,6 +172,21 @@ class SharedHandler(app.Handler):
         self.end_headers()
         self.wfile.write(b'{"ok":true}')
 
+    def logout(self):
+        """POST /deconnexion: forget this browser's session, then show the login page."""
+        origin = self.headers.get('Origin')
+        if origin and not self.origin_allowed(origin):
+            return self.json_response(403, {'error': 'Origine refusée.'})
+        try:
+            token = SimpleCookie(self.headers.get('Cookie', '')).get('__Host-omr_session')
+        except CookieError:
+            token = None
+        if token:
+            with self.sessions_lock:
+                self.sessions.pop(token.value, None)
+        # Expired at once: the browser drops it even if the session was already unknown here.
+        return self.native_redirect('/', '__Host-omr_session=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0')
+
     def native_redirect(self, location, cookie=None):
         self.send_response(303)
         if cookie:
@@ -434,6 +449,8 @@ class SharedHandler(app.Handler):
     def do_POST(self):
         if urlparse(self.path).path == '/login':
             return self.login()
+        if urlparse(self.path).path == '/deconnexion':
+            return self.logout()
         if urlparse(self.path).path == '/activation':
             return self.handle_activation(True)
         if urlparse(self.path).path == '/mot-de-passe-oublie':
