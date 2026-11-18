@@ -6,3 +6,6 @@ __pycache__/
 .ai-code-tracker.json
 .venv/
 dist/
+# Réglages propres à chaque poste (éditeur, lancement)
+.vscode/
+.claude/
