@@ -19,6 +19,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 import chemins
+import envoi_liseuse
 import installation_config
 import paheko_upload
 import paroles
@@ -734,7 +735,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/liseuse/statut' and not post:
             self.json_response(200, {'available': liseuse is not None,
                                      'systems': liseuse is not None and liseuse._find_staves is not None,
-                                     'musicxml': liseuse is not None and liseuse.verovio is not None})
+                                     'musicxml': liseuse is not None and liseuse.verovio is not None,
+                                     'sender': envoi_liseuse.sender()})
+            return True
+        if path == '/api/liseuse/envoi' and post:
+            self.send_to_reader()
             return True
         if path != '/api/liseuse' or not post:
             return False
@@ -773,6 +778,29 @@ class Handler(BaseHTTPRequestHandler):
                             {'X-Pages': str(info['pages']), 'X-Systems': str(info['systems']),
                              'X-Engraved': '1' if info.get('engraved') else '0'})
         return True
+
+    def send_to_reader(self):
+        """POST /api/liseuse/envoi: the PDF produced for the reader, e-mailed to its Send-to-PocketBook address."""
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+        except ValueError:
+            length = 0
+        if not 0 < length <= envoi_liseuse.MAX_BYTES:
+            return self.json_response(413, {'error': 'Ce PDF dépasse 20 Mo.'})
+        content = self.rfile.read(length)
+        if len(content) != length:
+            return self.json_response(400, {'error': 'Envoi incomplet. Réessayez.'})
+        name = unquote(self.headers.get('X-Filename', 'partition_liseuse.pdf'))[:200]
+        name = re.sub(r'[\x00-\x1f/\\]', '_', name) or 'partition_liseuse.pdf'
+        address = unquote(self.headers.get('X-Recipient', ''))
+        who = getattr(self, 'user', None) or self.client_address[0]
+        try:
+            envoi_liseuse.send(address, content, name, who)
+        except ValueError as error:
+            return self.json_response(400, {'error': str(error)})
+        except RuntimeError as error:
+            return self.json_response(503, {'error': str(error)})
+        return self.json_response(200, {'sent': address})
 
     def import_request(self):
         """POST /api/jobs/musicxml: a MusicXML file joins the conversions, ready for review."""

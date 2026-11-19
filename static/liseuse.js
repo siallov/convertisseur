@@ -16,6 +16,7 @@ async function checkAvailability() {
       return false;
     }
     state.musicxml = status.musicxml;
+    showSending(status.sender);
     $('#reader-status').textContent = !status.systems ? '● Disponible (systèmes non reconnus : SciPy absent)'
       : status.musicxml ? '● Disponible' : '● Disponible (PDF seulement : verovio absent)';
     return true;
@@ -40,6 +41,7 @@ async function choose(file) {
   }
   state.file = file;
   $('#save').disabled = true;
+  $('#send').disabled = true;
   $('#summary').textContent = '';
   notice(xml ? `Gravure de « ${file.name} » au format de l’écran…`
     : `Mise en page de « ${file.name} »… Un scan peut prendre quelques secondes par page.`);
@@ -71,6 +73,7 @@ async function choose(file) {
         ? 'Aucun système reconnu : la page a été découpée sur les espaces blancs. Vérifiez l’aperçu.'
         : 'Vérifiez l’aperçu, puis copiez le PDF sur la liseuse.');
     $('#save').disabled = false;
+    $('#send').disabled = false;
   } catch (error) {
     notice(error.message);
   }
@@ -84,6 +87,44 @@ $('#save').addEventListener('click', () => {
   document.body.append(link);
   link.click();
   link.remove();
+});
+// Envoi par Send-to-PocketBook : proposé seulement si le convertisseur a un compte d'envoi d'e-mails.
+const ADDRESS_KEY = 'liseuse.pbsync';
+const PBSYNC = /^[A-Za-z0-9._%+-]{1,64}@pbsync\.com$/;
+function showSending(sender) {
+  $('#send-box').hidden = !sender;
+  if (!sender) return;
+  $('#sender').textContent = sender;
+  if (!$('#pb-address').value) {
+    try { $('#pb-address').value = localStorage.getItem(ADDRESS_KEY) || ''; } catch { /* stockage indisponible */ }
+  }
+}
+$('#send').addEventListener('click', async () => {
+  if (!state.blob) return;
+  const address = $('#pb-address').value.trim();
+  if (!PBSYNC.test(address)) {
+    notice('Indiquez l’adresse Send-to-PocketBook de la liseuse (elle se termine par @pbsync.com).');
+    $('#pb-address').focus();
+    return;
+  }
+  try { localStorage.setItem(ADDRESS_KEY, address); } catch { /* stockage indisponible */ }
+  $('#send').disabled = true;
+  notice(`Envoi de « ${state.name} » à ${address}…`);
+  try {
+    const response = await fetch('/api/liseuse/envoi', {
+      method: 'POST', body: state.blob,
+      headers: { 'Content-Type': 'application/pdf', 'X-Filename': encodeURIComponent(state.name),
+        'X-Recipient': encodeURIComponent(address) },
+    });
+    let result = {};
+    try { result = await response.json(); } catch { /* not JSON */ }
+    if (!response.ok) throw Error(result.error || 'Erreur du serveur.');
+    notice('Envoyé. Allumez le Wi-Fi de la liseuse : la partition arrive en quelques minutes dans « Send-to-PocketBook ».');
+  } catch (error) {
+    notice(error.message);
+  } finally {
+    $('#send').disabled = !state.blob;
+  }
 });
 $('#file').addEventListener('change', event => choose(event.target.files[0]));
 // A new note size re-engraves the MusicXML already chosen.
